@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hexagon Sector Map</title>
+<style>
+:root{
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  --bg:#dde3e1; --paper:#eef1ef; --ink:#1e2b36; --muted:#56646e; --line:#b9c4c3;
+  --grid:rgba(30,43,54,.08); --btn:#1e2b36; --btn-ink:#f2f4f3; --accent:#f2b134;
+  --outline:rgba(30,43,54,.35);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#1a2329; --paper:#222d34; --ink:#e3e8e6; --muted:#9aa8ae; --line:#34434b;
+    --grid:rgba(227,232,230,.06); --btn:#e3e8e6; --btn-ink:#1a2329; --outline:rgba(227,232,230,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#1a2329; --paper:#222d34; --ink:#e3e8e6; --muted:#9aa8ae; --line:#34434b;
+  --grid:rgba(227,232,230,.06); --btn:#e3e8e6; --btn-ink:#1a2329; --outline:rgba(227,232,230,.3);
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif; font-size:16px; line-height:1.45;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:24px 24px;
+}
+.wrap{max-width:1240px;margin:0 auto;padding:20px 18px 40px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:14px}
+h1{font-family:"Chakra Petch","Arial Narrow",sans-serif;font-weight:700;font-size:clamp(1.6rem,3.2vw,2.3rem);line-height:1.05;margin:0;letter-spacing:.01em}
+.sub{color:var(--muted);margin:4px 0 0;font-size:.95rem}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button,input{font:inherit}
+.btn{background:var(--btn);color:var(--btn-ink);border:0;border-radius:4px;padding:9px 16px;font-family:"Chakra Petch",sans-serif;font-weight:600;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--ink);border:1.5px solid var(--ink)}
+.btn:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.hexcell:focus{outline:none}
+.hexcell:focus-visible .hl{stroke:var(--accent)}
+.seed{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:.9rem}
+.seed input{width:110px;padding:7px 8px;border:1.5px solid var(--line);border-radius:4px;background:var(--paper);color:var(--ink)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start}
+@media (max-width:900px){.layout{grid-template-columns:1fr}}
+.board{background:var(--paper);border:1.5px solid var(--line);border-radius:6px;padding:10px;overflow-x:auto}
+.board svg{display:block;width:100%;height:auto;max-width:100%;min-width:320px}
+aside{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--paper);border:1.5px solid var(--line);border-radius:6px;padding:14px 16px}
+.card h2{font-family:"Chakra Petch",sans-serif;font-size:1.05rem;font-weight:600;margin:0 0 8px}
+.inspect{min-height:92px}
+.inspect .name{font-family:"Chakra Petch",sans-serif;font-size:1.25rem;font-weight:700}
+.inspect .meta{color:var(--muted);font-size:.92rem}
+table{width:100%;border-collapse:collapse;font-size:.93rem}
+td{padding:3px 0;border-bottom:1px solid var(--line)}
+td.n{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+tr.grp td{font-weight:600;padding-top:8px}
+tr.sub td:first-child{padding-left:14px;color:var(--muted)}
+.legend{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 10px;font-size:.88rem}
+.legend div{display:flex;align-items:center;gap:6px}
+.legend svg{flex:none}
+.legend h3{grid-column:1/-1;margin:8px 0 0;font-size:.85rem;font-weight:600;color:var(--muted)}
+.legend h3:first-child{margin-top:0}
+.hexcell{cursor:pointer}
+.hexcell .hl{fill:none;stroke:transparent;stroke-width:3}
+.hexcell:hover .hl,.hexcell.sel .hl{stroke:var(--accent)}
+.note{color:var(--muted);font-size:.85rem;margin:8px 0 0}
+.seatrow{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}
+.seatrow:last-child{border-bottom:0}
+.dot{width:16px;height:16px;border-radius:50%;flex:none;border:2px solid var(--paper);box-shadow:0 0 0 1.5px var(--ink)}
+.who{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2}
+.who b{font-family:"Chakra Petch",sans-serif;font-weight:600}
+.who span{color:var(--muted);font-size:.86rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sbtn{font:inherit;font-size:.82rem;font-weight:600;padding:5px 10px;border-radius:4px;border:1.5px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer;white-space:nowrap}
+.sbtn.solid{background:var(--btn);color:var(--btn-ink);border-color:var(--btn)}
+.sbtn:disabled{opacity:.4;cursor:default}
+.sbtn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.mechrow{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)}
+.mechrow.on{background:linear-gradient(90deg,rgba(242,177,52,.22),transparent);margin:0 -16px;padding:9px 16px}
+.tok{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#fff;font-family:"Chakra Petch",sans-serif;font-weight:700;border:2px solid #fff;box-shadow:0 0 0 1.5px var(--ink);grid-row:span 2}
+.mname{font-family:"Chakra Petch",sans-serif;font-weight:600}
+.mmeta{color:var(--muted);font-size:.85rem;grid-column:2}
+.stepper{display:flex;align-items:center;gap:4px;grid-row:span 2}
+.stepper .val{min-width:30px;text-align:center;font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1.1rem}
+.stepper button{width:28px;height:28px;border-radius:4px;border:1.5px solid var(--ink);background:transparent;color:var(--ink);font-weight:700;cursor:pointer}
+.stepper button:disabled{opacity:.35;cursor:default}
+.mactions{grid-column:1/4;display:flex;gap:6px;flex-wrap:wrap;padding-left:40px}
+.mech{cursor:pointer}
+.mech:focus-visible{outline:none;filter:drop-shadow(0 0 3px #f2b134) drop-shadow(0 0 2px #f2b134)}
+.roster{grid-column:1/4;display:grid;grid-template-columns:1fr 1fr;gap:6px;padding-left:40px;margin-top:4px}
+.roster .rl{grid-column:1/3;font-size:.8rem;font-weight:600;color:var(--muted)}
+.roster input{font:inherit;font-size:.88rem;padding:5px 7px;border:1.5px solid var(--line);border-radius:4px;background:var(--bg);color:var(--ink);min-width:0}
+.roster input:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+.roster input:disabled{opacity:.7}
+.actsel{font:inherit;font-size:.85rem;font-weight:600;padding:4px 6px;border:1.5px solid var(--ink);border-radius:4px;background:var(--paper);color:var(--ink)}
+.actsel:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.actrule{grid-column:1/4;padding-left:40px;font-size:.83rem;color:var(--muted)}
+.roster{grid-template-columns:1fr 64px !important}
+.roster .rl{grid-column:1/3}
+.roster .mvh{font-size:.75rem;color:var(--muted);font-weight:600}
+.subin{display:block;width:100%;font-family:"Barlow",system-ui,sans-serif;font-size:.86rem;font-style:italic;font-weight:500;padding:2px 6px;margin:2px 0 0 -6px;border:1.5px solid transparent;border-radius:4px;background:transparent;color:var(--muted)}
+.subin:hover:not(:disabled),.subin:focus{border-color:var(--line);background:var(--bg);color:var(--ink)}
+.subin:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+.subin:disabled{opacity:1}
+.subt{font-style:italic;color:var(--muted);margin:-2px 0 4px}
+.dmgtxt{color:#c0362c;font-weight:600;font-size:.9rem;margin-top:4px}
+.dmgbtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.rlist{margin:6px 0 2px;padding-left:20px;font-size:.92rem}
+.salv{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.salv .prev{font-size:.9rem;white-space:pre-wrap;max-height:5.8em;overflow:hidden;margin:4px 0 8px;color:var(--ink)}
+.salv .sbtn{margin-top:6px}
+.modal{position:fixed;inset:0;background:rgba(10,15,20,.55);display:none;align-items:center;justify-content:center;z-index:30;padding:calc(16px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px))}
+.modal.open{display:flex}
+.sheet{background:var(--paper);color:var(--ink);border-radius:8px;border:1.5px solid var(--line);width:min(660px,100%);max-height:100%;display:flex;flex-direction:column;padding:18px 20px;gap:10px}
+.sheet h2{font-family:"Chakra Petch",sans-serif;margin:0;font-size:1.3rem}
+.sheet .meta{color:var(--muted);font-size:.9rem}
+.sheet textarea{flex:1;min-height:280px;font:inherit;font-size:.96rem;line-height:1.5;padding:10px 12px;border:1.5px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);resize:vertical}
+.sheet textarea:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+.sheet .row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--btn);color:var(--btn-ink);padding:9px 16px;border-radius:6px;font-size:.92rem;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20;max-width:90vw}
+.toast.show{opacity:1}
+.livetag{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;color:var(--muted)}
+.livetag i{width:8px;height:8px;border-radius:50%;background:#8a9399;display:inline-block}
+.livetag.on i{background:#30a46c}
+</style>
+</head>
+<body>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="modal" id="salvmodal" role="dialog" aria-modal="true" aria-labelledby="salvtitle">
+  <div class="sheet">
+    <div class="row"><div><h2 id="salvtitle">Salvage</h2><div class="meta" id="salvsub"></div></div><button class="sbtn" id="salvclose">Close</button></div>
+    <textarea id="salvtext" maxlength="20000" aria-label="Salvage document" placeholder="Assign salvage to this hex: mechs, parts, equipment, C-bills, who claimed what…"></textarea>
+    <div class="row"><span class="meta" id="salvstatus"></span><span class="meta">Shared with everyone in this game</span></div>
+  </div>
+</div>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Hexagon Sector Map</h1>
+      <p class="sub" id="subline"></p>
+    </div>
+    <div class="controls">
+      <span class="livetag" id="livetag"><i></i><span>Local game</span></span>
+      <span id="mapctl" style="display:contents">
+      <button class="btn" id="gen">New map</button>
+      <button class="btn ghost" id="resetm">Reset lances</button>
+      <label class="seed">Seed <input id="seed" inputmode="numeric" aria-label="Map seed"></label>
+      <button class="btn ghost" id="load">Load seed</button>
+      </span>
+    </div>
+  </header>
+  <div class="layout">
+    <div class="board"><svg id="map" role="img" aria-label="Hex map shaped like a hexagon"></svg></div>
+    <aside>
+      <div class="card inspect" id="inspect" aria-live="polite">
+        <div class="name">Select a hex</div>
+        <div class="meta">Hover or tap any hex to see its type.</div>
+      </div>
+      <div class="card" id="mechcard"><h2 id="mechtitle">Lances</h2><div id="mechlist"></div>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="sbtn solid" id="refill">New turn: refill MP</button></div>
+        <p class="note">The number on each lance is its movement points. Pick an Action for each lance before moving; it sets how far the lance can go and whether it may end on an enemy lance's hex. Each hex entered costs 1 MP and a Rough hex 2 MP; entering a highway hex, or following a highway out of one, costs ½ MP. Impassible hexes can't be entered, and lances never move through an enemy hex.</p></div>
+      <div class="card"><h2>Players</h2><div id="seatlist"></div><p class="note" id="modenote"></p></div>
+      <div class="card"><h2>Map totals</h2><table id="totals"></table></div>
+      <div class="card"><h2>Legend</h2><div class="legend" id="legend"></div>
+        <p class="note">Dashed inner border marks rough terrain (also on Special hexes); heavy border marks impassible terrain.</p></div>
+    </aside>
+  </div>
+</div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
