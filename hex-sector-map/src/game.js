@@ -552,6 +552,14 @@ function renderInspect(){
     if(dd.kind==="Special"){const b1=document.createElement("button");b1.className="sbtn";b1.textContent=dv.special?"Repair site":"Mark site destroyed";b1.disabled=ro;b1.onclick=()=>toggleDestroyed(c,"special");box.appendChild(b1);}
     if(dd.highway){const b2=document.createElement("button");b2.className="sbtn";b2.textContent=dv.highway?"Repair highway":"Destroy highway";b2.disabled=ro;b2.onclick=()=>toggleDestroyed(c,"highway");box.appendChild(b2);}
   }
+  if(dd.kind==="Special"){
+    const ow=hexState(c).owner;
+    if(ow!=null){const so=seat(ow).owner,who=so&&names[so]?` (${names[so]})`:"";const ol=add("ownline",`Owned by P${ow+1} · ${PLAYER_NAMES[ow]}${who}`,sec);ol.style.borderLeftColor=PLAYER_COLORS[ow];}
+    const orow=document.createElement("label");orow.className="ownrow";orow.textContent="Owner";
+    const osel=document.createElement("select");osel.className="actsel";osel.disabled=live&&!canWrite;
+    osel.innerHTML=`<option value="">No owner</option>`+PLAYER_NAMES.map((n,i)=>`<option value="${i}"${ow===i?" selected":""}>P${i+1} · ${n}</option>`).join("");
+    osel.onchange=()=>setOwner(c,osel.value===""?null:+osel.value);orow.appendChild(osel);sec.appendChild(orow);
+  }
   const txt=salvage.get(key(c.q,c.r))||"";
   const sv=document.createElement("div");sv.className="salv";sec.appendChild(sv);
   add("mname","Salvage",sv);
@@ -570,7 +578,7 @@ function subscribeSalvage(){
   if(salvUnsub)salvUnsub();if(dmgUnsub)dmgUnsub();salvSeed=game.seed;salvage=new Map();destroyed=new Map();
   dmgUnsub=db.collection(`maps/s${game.seed}/destroyed`).onSnapshot(qs=>{
     const next=new Map();
-    qs.docs.forEach(d=>{const v=d.data();if(v&&typeof v.q==="number"&&typeof v.r==="number"&&(v.special||v.highway))next.set(key(v.q,v.r),{special:!!v.special,highway:!!v.highway});});
+    qs.docs.forEach(d=>{const v=d.data();if(!v||typeof v.q!=="number"||typeof v.r!=="number")return;const ow=Number.isInteger(v.owner)&&v.owner>=0&&v.owner<NC?v.owner:null;if(v.special||v.highway||ow!=null)next.set(key(v.q,v.r),{special:!!v.special,highway:!!v.highway,owner:ow});});
     destroyed=next;refreshAll();
   },()=>{});
   salvUnsub=db.collection(salvPath()).onSnapshot(qs=>{
@@ -619,15 +627,19 @@ $("salvmodal").addEventListener("keydown",e=>{if(e.key==="Escape"){e.stopPropaga
 
 /* ----- destroyed Special sites and highways (per map, shared) ----- */
 function hwyDown(c){const v=destroyed.get(key(c.q,c.r));return !!(v&&v.highway);}
-function toggleDestroyed(c,field){
-  const k=key(c.q,c.r),v=Object.assign({special:false,highway:false},destroyed.get(k)||{});v[field]=!v[field];
-  if(v.special||v.highway)destroyed.set(k,v);else destroyed.delete(k);
+// Per-hex shared state for this map: destroyed site/highway, and which player owns a Special site
+function hexState(c){return Object.assign({special:false,highway:false,owner:null},destroyed.get(key(c.q,c.r))||{});}
+function writeHexState(c,v){
+  const k=key(c.q,c.r),keep=!!(v.special||v.highway||v.owner!=null);
+  if(keep)destroyed.set(k,v);else destroyed.delete(k);
   refreshAll();
   if(!live)return;
   const path=`maps/s${game.seed}/destroyed/${hexDocId(c)}`;
-  queues[path]=(queues[path]||Promise.resolve()).then(()=>(v.special||v.highway)?db.doc(path).set({special:v.special,highway:v.highway,q:c.q,r:c.r}):db.doc(path).delete()).catch(handleWriteErr);
+  queues[path]=(queues[path]||Promise.resolve()).then(()=>keep?db.doc(path).set({special:!!v.special,highway:!!v.highway,owner:v.owner==null?null:v.owner,q:c.q,r:c.r}):db.doc(path).delete()).catch(handleWriteErr);
 }
-// Damage art is randomised per hex but seeded by the hex, so it looks the same on every redraw and for every player
+function toggleDestroyed(c,field){const v=hexState(c);v[field]=!v[field];writeHexState(c,v);}
+function setOwner(c,o){const v=hexState(c);v.owner=Number.isInteger(o)&&o>=0&&o<NC?o:null;writeHexState(c,v);}
+function ownedCount(i){let n=0;if(!RES)return 0;destroyed.forEach((v,k)=>{const c=byKey.get(k);if(v.owner===i&&c&&RES.map.get(c).kind==="Special")n++;});return n;}
 const hashStr=s=>{let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return h>>>0;};
 function blob(rng,r,n,j,sy){let d="";for(let i=0;i<n;i++){const a=i/n*Math.PI*2+rng()*0.25,rr=r*(1-j/2+rng()*j);d+=(i?"L":"M")+(Math.cos(a)*rr).toFixed(1)+" "+(Math.sin(a)*rr*(sy||1)).toFixed(1);}return d+"Z";}
 function crater(rng,x,y,s){
@@ -647,6 +659,10 @@ function drawDamage(){
   const g=$("dmg");if(!g||!RES)return;let out="";
   destroyed.forEach((v,k)=>{
     const c=byKey.get(k);if(!c)return;const d=RES.map.get(c);
+    if(v.owner!=null&&d.kind==="Special"){
+      const oc=PLAYER_COLORS[v.owner];
+      out+=`<g transform="translate(${c.x.toFixed(1)},${c.y.toFixed(1)})"><polygon points="${hexPts(S-3)}" fill="none" stroke="${oc}" stroke-width="5.5" stroke-linejoin="round"/><g transform="translate(13,-11)"><path d="M0 0V-13" stroke="#1e2b36" stroke-width="1.5" stroke-linecap="round"/><path d="M.5 -13H13L10.4 -9.2L13 -5.4H.5Z" fill="${oc}" stroke="#1e2b36" stroke-width=".9" stroke-linejoin="round"/><text x="6.2" y="-7" text-anchor="middle" font-family="Chakra Petch, Arial Narrow, sans-serif" font-size="6.2" font-weight="700" fill="#fff">P${v.owner+1}</text></g></g>`;
+    }
     if(v.highway&&d.highway){
       const rng=mulberry32(hashStr(k));
       RES.roads.forEach(([a,b])=>{const o=a===c?b:b===c?a:null;if(!o)return;
@@ -694,6 +710,7 @@ function renderSeats(){
     else if(!s.owner)sp.textContent="Open seat";
     else if(s.owner===myId)sp.textContent="You";
     else sp.textContent=names[s.owner]||"Taken";
+    {const oc=ownedCount(i);if(oc)sp.textContent+=` · ${oc} site${oc>1?"s":""}`;}
     who.append(b,sp);row.appendChild(who);
     const btn=document.createElement("button");btn.className="sbtn";
     if(!live){btn.textContent=i===mine?"Active":"Control";btn.disabled=i===mine;btn.onclick=()=>takeSeat(i);}
