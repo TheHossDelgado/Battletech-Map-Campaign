@@ -430,7 +430,7 @@ function moveTo(c){
 function undo(i,name){const s=clone(seat(i)),m=s.mechs[name];if(!m.prev)return;m.q=m.prev.q;m.r=m.prev.r;m.spent=typeof m.prev.spent==="number"?m.prev.spent:(typeof m.prev.rem==="number"?Math.max(0,m.mp-m.prev.rem):0);delete m.rem;m.prev=null;writeSeat(i,s);}
 function setMP(i,name,delta){const s=clone(seat(i)),m=s.mechs[name];const mp=Math.min(MAX_MP,Math.max(0,m.mp+delta));const d=mp-m.mp;if(!d)return;m.spent=spentOf(m);delete m.rem;m.mp=mp;writeSeat(i,s);}
 /* ----- victory points, XP and initiative ----- */
-let initPick=null;
+let initPick=null,initOrder=null; // initOrder: seats in an order an admin set by hand, or null
 const isAdminUser=()=>!live||(isEditor&&canWrite);
 const vpOf=i=>{const s=scores[i];return s&&typeof s.vp==="number"?s.vp:0;};
 const xpOf=(i,name,k)=>{const s=scores[i];const a=s&&s.xp&&s.xp[name];return a&&typeof a[k]==="number"?a[k]:0;};
@@ -480,18 +480,34 @@ function writeInit(i,data){
 function rollInit(i){
   const all=initEntries(),me=all.find(e=>e.seat===i),a=d6(),b=d6(),who=`P${i+1} ${PLAYER_NAMES[i]}`;
   if(!me){writeInit(i,{roll:a+b,d:[a,b],tb:[]});toast(`${who} rolled ${a+b} (${a} + ${b})`);return;}
-  if(needsTiebreak(me,all)){writeInit(i,{roll:me.roll,d:me.d,tb:me.tb.concat(a+b)});toast(`${who} tiebreak roll: ${a+b} (${a} + ${b})`);return;}
+  if(!initOrder&&needsTiebreak(me,all)){writeInit(i,{roll:me.roll,d:me.d,tb:me.tb.concat(a+b)});toast(`${who} tiebreak roll: ${a+b} (${a} + ${b})`);return;}
   toast(`${who} has already rolled this round.`);
 }
-function clearInit(){for(let i=0;i<NC;i++)if(inits[i])writeInit(i,null);}
+function writeInitOrder(arr){
+  initOrder=arr&&arr.length?arr:null;refreshAll();if(!live)return;
+  const path="init/order",v=initOrder;
+  queues[path]=(queues[path]||Promise.resolve()).then(()=>v?db.doc(path).set({seats:v}):db.doc(path).delete()).catch(handleWriteErr);
+}
+function sortedInit(all){
+  const sorted=all.slice().sort(cmpInit);if(!initOrder)return sorted;
+  const pos=s=>{const k=initOrder.indexOf(s);return k<0?1e3:k;};
+  return sorted.map((e,k)=>[e,k]).sort((a,b)=>(pos(a[0].seat)-pos(b[0].seat))||(a[1]-b[1])).map(x=>x[0]);
+}
+function moveInit(seatI,dir){
+  if(!isAdminUser())return;
+  const order=sortedInit(initEntries()).map(e=>e.seat),k=order.indexOf(seatI),j=k+dir;
+  if(k<0||j<0||j>=order.length)return;
+  [order[k],order[j]]=[order[j],order[k]];writeInitOrder(order);
+}
+function clearInit(){for(let i=0;i<NC;i++)if(inits[i])writeInit(i,null);if(initOrder)writeInitOrder(null);}
 function renderInit(){
   const list=$("initlist");if(!list)return;list.textContent="";
-  const all=initEntries().sort(cmpInit),parts=participants();
+  const all=sortedInit(initEntries()),parts=participants(),adminView=isAdminUser();
   const waiting=parts.filter(i=>!inits[i]||typeof inits[i].roll!=="number");
   let pos=0;
   all.forEach((e,idx)=>{
-    const tie=needsTiebreak(e,all),prev=all[idx-1];
-    const sameAsPrev=!!(prev&&tiedSoFar(prev,e));
+    const tie=!initOrder&&needsTiebreak(e,all),prev=all[idx-1];
+    const sameAsPrev=!initOrder&&!!(prev&&tiedSoFar(prev,e));
     if(!sameAsPrev)pos=idx+1;
     const row=document.createElement("div");row.className="initrow";
     const p=document.createElement("span");p.className="initpos";p.textContent=sameAsPrev?"=":String(pos);
@@ -504,18 +520,26 @@ function renderInit(){
     if(tie){const t=document.createElement("span");t.className="tietag";t.textContent="Tied: roll again";who.appendChild(t);}
     const r=document.createElement("div");r.className="initroll";r.textContent=String(e.roll);
     if(e.d.length===2){const dd=document.createElement("div");dd.className="initsub";dd.textContent=`${e.d[0]} + ${e.d[1]}`;r.appendChild(dd);}
-    row.append(p,dot,who,r);list.appendChild(row);
+    if(adminView){
+      row.classList.add("adm");
+      const mv=document.createElement("div");mv.className="initmove";
+      mv.append(tinyBtn("▲",`Move P${e.seat+1} up`,()=>moveInit(e.seat,-1),idx===0),tinyBtn("▼",`Move P${e.seat+1} down`,()=>moveInit(e.seat,1),idx===all.length-1));
+      row.append(p,dot,who,r,mv);
+    }else row.append(p,dot,who,r);
+    list.appendChild(row);
   });
   if(!all.length){const n=document.createElement("p");n.className="note";n.style.margin="0";n.textContent="No one has rolled this round.";list.appendChild(n);}
-  const anyTie=all.some(e=>needsTiebreak(e,all));
+  const anyTie=!initOrder&&all.some(e=>needsTiebreak(e,all));
   $("initnote").textContent=waiting.length?`Waiting for: ${waiting.map(i=>`P${i+1} ${PLAYER_NAMES[i]}`).join(", ")}.`
     :anyTie?"Tied players roll again to settle their order."
+    :initOrder&&all.length?"Final order for this round, as adjusted by an admin."
     :all.length?"Final order for this round: higher Victory Points first, then the lowest roll.":"";
+  if(initOrder&&waiting.length)$("initnote").textContent+=" Order adjusted by an admin.";
   const btns=$("initbtns");btns.textContent="";
   const mine=mySeat();
   if(mine>=0&&canControl(mine)){
     const me=all.find(e=>e.seat===mine),b=document.createElement("button");b.className="sbtn solid";
-    if(!me)b.textContent="Roll Initiative";else if(needsTiebreak(me,all))b.textContent="Roll Initiative (tiebreak)";else{b.textContent="Rolled";b.disabled=true;}
+    if(!me)b.textContent="Roll Initiative";else if(!initOrder&&needsTiebreak(me,all))b.textContent="Roll Initiative (tiebreak)";else{b.textContent="Rolled";b.disabled=true;}
     b.onclick=()=>rollInit(mine);btns.appendChild(b);
   }
   if(isAdminUser()){
@@ -524,7 +548,9 @@ function renderInit(){
     if(initPick!=null)sel.value=String(initPick);sel.onchange=()=>{initPick=+sel.value;};
     const rb=document.createElement("button");rb.className="sbtn";rb.textContent="Roll for player";rb.onclick=()=>{initPick=+sel.value;rollInit(+sel.value);};
     const cb=document.createElement("button");cb.className="sbtn";cb.textContent="Clear initiative";cb.onclick=()=>armed(cb,"Clear initiative",clearInit);
-    const adm=document.createElement("div");adm.className="initadmin";adm.append(sel,rb,cb);btns.appendChild(adm);
+    const adm=document.createElement("div");adm.className="initadmin";adm.append(sel,rb,cb);
+    if(initOrder){const ub=document.createElement("button");ub.className="sbtn";ub.textContent="Use rolled order";ub.onclick=()=>writeInitOrder(null);adm.appendChild(ub);}
+    btns.appendChild(adm);
   }
 }
 
@@ -966,6 +992,6 @@ loadMap(game.seed);
   },()=>toast("Lost the live connection. Reload to reconnect."));
   const bySeat=qs=>{const n=new Array(NC).fill(null);qs.docs.forEach(doc=>{const m=/^p(\d)$/.exec(doc.id);if(m&&+m[1]>=1&&+m[1]<=NC)n[+m[1]-1]=doc.data();});return n;};
   db.collection("scores").onSnapshot(qs=>{scores=bySeat(qs);refreshAll();},()=>{});
-  db.collection("init").onSnapshot(qs=>{inits=bySeat(qs);refreshAll();},()=>{});
+  db.collection("init").onSnapshot(qs=>{inits=bySeat(qs);const od=qs.docs.find(d=>d.id==="order"),ov=od&&od.data();initOrder=ov&&Array.isArray(ov.seats)&&ov.seats.length?ov.seats.filter(x=>Number.isInteger(x)&&x>=0&&x<NC):null;refreshAll();},()=>{});
 })();
 })();
