@@ -65,6 +65,10 @@ async function connect() {
     if (!isAdmin) return Promise.reject(new Error("Only an admin can change the map."));
     return callAdmin({ action: "setGame", room: me.room, seed, epoch, ...creds() });
   };
+  window.__hexAdminDoc = (path, data) => {
+    if (!isAdmin) return Promise.reject(new Error("Only an admin can change Victory Points and XP."));
+    return callAdmin({ action: "setScore", room: me.room, path, data, ...creds() });
+  };
   setupAdminButton({
     listedAdmin,
     isAdmin: () => isAdmin,

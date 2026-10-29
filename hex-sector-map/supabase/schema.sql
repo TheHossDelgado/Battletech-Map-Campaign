@@ -59,10 +59,13 @@ drop policy if exists "players delete docs" on public.docs;
 create policy "players read docs"   on public.docs for select to anon, authenticated using (true);
 -- Players may create the very first map, but only admins (through api/admin.js, which uses
 -- the service key and skips these rules) can change or remove it afterwards.
-create policy "players insert docs" on public.docs for insert to anon, authenticated with check (true);
+-- Victory Points and XP (scores/...) can only be changed by admins, the same way.
+create policy "players insert docs" on public.docs for insert to anon, authenticated
+  with check (path not like 'scores/%');
 create policy "players update docs" on public.docs for update to anon, authenticated
-  using (path <> 'game/state') with check (path <> 'game/state');
+  using (path <> 'game/state' and path not like 'scores/%')
+  with check (path <> 'game/state' and path not like 'scores/%');
 create policy "players delete docs" on public.docs for delete to anon, authenticated
-  using (path <> 'game/state');
+  using (path <> 'game/state' and path not like 'scores/%');
 grant select, insert, update, delete on public.docs to anon, authenticated;
 grant execute on function public.acquire_lease(text, text, text, int) to anon, authenticated;

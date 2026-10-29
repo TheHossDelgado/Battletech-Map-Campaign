@@ -341,7 +341,8 @@ let RES=null, game={seed:null,epoch:"local"}, rawSeats=new Array(NC).fill(null);
 let db=null,user=null,myId=null,live=false,canWrite=true,isEditor=true,names={};
 let selected=null, reachMap=null, hoverCell=null, pinnedCell=null, localSeat=0;
 let roadSet=new Set(); // "from|to" hex pairs joined by a highway, both directions
-let destroyed=new Map(),dmgUnsub=null; // hexKey -> {special,highway}
+let destroyed=new Map(),dmgUnsub=null; // hexKey -> {special,highway,owner}
+let scores=new Array(NC).fill(null),inits=new Array(NC).fill(null); // per seat: {vp,xp}, {roll,d,tb}
 
 const clone=o=>JSON.parse(JSON.stringify(o));
 const fmt=n=>Number.isInteger(n)?String(n):(Math.round(n*10)/10).toString();
@@ -428,6 +429,105 @@ function moveTo(c){
 }
 function undo(i,name){const s=clone(seat(i)),m=s.mechs[name];if(!m.prev)return;m.q=m.prev.q;m.r=m.prev.r;m.spent=typeof m.prev.spent==="number"?m.prev.spent:(typeof m.prev.rem==="number"?Math.max(0,m.mp-m.prev.rem):0);delete m.rem;m.prev=null;writeSeat(i,s);}
 function setMP(i,name,delta){const s=clone(seat(i)),m=s.mechs[name];const mp=Math.min(MAX_MP,Math.max(0,m.mp+delta));const d=mp-m.mp;if(!d)return;m.spent=spentOf(m);delete m.rem;m.mp=mp;writeSeat(i,s);}
+/* ----- victory points, XP and initiative ----- */
+let initPick=null;
+const isAdminUser=()=>!live||(isEditor&&canWrite);
+const vpOf=i=>{const s=scores[i];return s&&typeof s.vp==="number"?s.vp:0;};
+const xpOf=(i,name,k)=>{const s=scores[i];const a=s&&s.xp&&s.xp[name];return a&&typeof a[k]==="number"?a[k]:0;};
+function writeScore(i,data){
+  scores[i]=data;refreshAll();if(!live)return;
+  const path=`scores/p${i+1}`;
+  // The standalone build routes score changes through its admin server; the artifact writes directly
+  const go=typeof window.__hexAdminDoc==="function"?()=>window.__hexAdminDoc(path,data):()=>db.doc(path).set(data);
+  queues[path]=(queues[path]||Promise.resolve()).then(go).catch(e=>toast((e&&e.message)||"Couldn't save that change."));
+}
+function scoreCopy(i){
+  const s=scores[i]?clone(scores[i]):{};const out={vp:typeof s.vp==="number"?s.vp:0,xp:{}};
+  MECHS.forEach(n=>{const a=(s.xp&&Array.isArray(s.xp[n])?s.xp[n]:[]).slice(0,4);while(a.length<4)a.push(0);out.xp[n]=a.map(v=>typeof v==="number"?v:0);});
+  return out;
+}
+function changeVP(i,d){if(!isAdminUser())return;const s=scoreCopy(i);s.vp=Math.max(0,Math.min(999,s.vp+d));writeScore(i,s);}
+function changeXP(i,name,k,d){if(!isAdminUser())return;const s=scoreCopy(i);s.xp[name][k]=Math.max(0,Math.min(999,s.xp[name][k]+d));writeScore(i,s);}
+function tinyBtn(label,aria,fn,dis){const b=document.createElement("button");b.className="tiny";b.textContent=label;b.setAttribute("aria-label",aria);b.disabled=!!dis;b.onclick=e=>{e.stopPropagation();fn();};return b;}
+function vpBox(i){
+  const w=document.createElement("div");w.className="vpbox";
+  const v=document.createElement("span");v.className="vpv";v.textContent=`${vpOf(i)} VP`;v.title="Victory Points";
+  if(isAdminUser())w.append(tinyBtn("−",`Lower P${i+1} Victory Points`,()=>changeVP(i,-1),vpOf(i)<=0),v,tinyBtn("+",`Raise P${i+1} Victory Points`,()=>changeVP(i,1)));
+  else w.append(v);
+  return w;
+}
+function xpCell(i,name,k){
+  const w=document.createElement("div");w.className="xpcell";
+  const v=document.createElement("span");v.className="xpv";v.textContent=String(xpOf(i,name,k));v.title="XP";
+  if(isAdminUser())w.append(tinyBtn("−",`Lower ${name} Lance mech ${k+1} XP`,()=>changeXP(i,name,k,-1),xpOf(i,name,k)<=0),v,tinyBtn("+",`Raise ${name} Lance mech ${k+1} XP`,()=>changeXP(i,name,k,1)));
+  else w.append(v);
+  return w;
+}
+
+// Initiative: 2d6 per player. Higher Victory Points always go first; among equal VP the lowest roll goes first.
+// Players tied on both roll again; those tiebreak rolls only order them among themselves.
+const d6=()=>1+Math.floor(Math.random()*6);
+function initEntries(){const out=[];for(let i=0;i<NC;i++){const r=inits[i];if(r&&typeof r.roll==="number")out.push({seat:i,vp:vpOf(i),roll:r.roll,d:Array.isArray(r.d)?r.d:[],tb:Array.isArray(r.tb)?r.tb:[]});}return out;}
+function tiedSoFar(a,b){if(a.vp!==b.vp||a.roll!==b.roll)return false;const n=Math.min(a.tb.length,b.tb.length);for(let k=0;k<n;k++)if(a.tb[k]!==b.tb[k])return false;return true;}
+function needsTiebreak(e,all){return all.some(o=>o!==e&&tiedSoFar(e,o)&&o.tb.length>=e.tb.length);}
+function cmpInit(a,b){if(a.vp!==b.vp)return b.vp-a.vp;if(a.roll!==b.roll)return a.roll-b.roll;const n=Math.min(a.tb.length,b.tb.length);for(let k=0;k<n;k++)if(a.tb[k]!==b.tb[k])return a.tb[k]-b.tb[k];return a.seat-b.seat;}
+function participants(){const out=[];for(let i=0;i<NC;i++)if(!live||seat(i).owner)out.push(i);return out;}
+function writeInit(i,data){
+  inits[i]=data;refreshAll();if(!live)return;
+  const path=`init/p${i+1}`;
+  queues[path]=(queues[path]||Promise.resolve()).then(()=>data?db.doc(path).set(data):db.doc(path).delete()).catch(handleWriteErr);
+}
+function rollInit(i){
+  const all=initEntries(),me=all.find(e=>e.seat===i),a=d6(),b=d6(),who=`P${i+1} ${PLAYER_NAMES[i]}`;
+  if(!me){writeInit(i,{roll:a+b,d:[a,b],tb:[]});toast(`${who} rolled ${a+b} (${a} + ${b})`);return;}
+  if(needsTiebreak(me,all)){writeInit(i,{roll:me.roll,d:me.d,tb:me.tb.concat(a+b)});toast(`${who} tiebreak roll: ${a+b} (${a} + ${b})`);return;}
+  toast(`${who} has already rolled this round.`);
+}
+function clearInit(){for(let i=0;i<NC;i++)if(inits[i])writeInit(i,null);}
+function renderInit(){
+  const list=$("initlist");if(!list)return;list.textContent="";
+  const all=initEntries().sort(cmpInit),parts=participants();
+  const waiting=parts.filter(i=>!inits[i]||typeof inits[i].roll!=="number");
+  let pos=0;
+  all.forEach((e,idx)=>{
+    const tie=needsTiebreak(e,all),prev=all[idx-1];
+    const sameAsPrev=!!(prev&&tiedSoFar(prev,e));
+    if(!sameAsPrev)pos=idx+1;
+    const row=document.createElement("div");row.className="initrow";
+    const p=document.createElement("span");p.className="initpos";p.textContent=sameAsPrev?"=":String(pos);
+    const dot=document.createElement("span");dot.className="dot";dot.style.background=PLAYER_COLORS[e.seat];
+    const who=document.createElement("div");who.className="who";
+    const b=document.createElement("b");b.textContent=`P${e.seat+1} · ${PLAYER_NAMES[e.seat]}`;
+    const sub=document.createElement("span");const so=seat(e.seat).owner;
+    sub.textContent=`${e.vp} VP${so&&names[so]?" · "+names[so]:""}${e.tb.length?" · tiebreak "+e.tb.join(", "):""}`;
+    who.append(b,sub);
+    if(tie){const t=document.createElement("span");t.className="tietag";t.textContent="Tied: roll again";who.appendChild(t);}
+    const r=document.createElement("div");r.className="initroll";r.textContent=String(e.roll);
+    if(e.d.length===2){const dd=document.createElement("div");dd.className="initsub";dd.textContent=`${e.d[0]} + ${e.d[1]}`;r.appendChild(dd);}
+    row.append(p,dot,who,r);list.appendChild(row);
+  });
+  if(!all.length){const n=document.createElement("p");n.className="note";n.style.margin="0";n.textContent="No one has rolled this round.";list.appendChild(n);}
+  const anyTie=all.some(e=>needsTiebreak(e,all));
+  $("initnote").textContent=waiting.length?`Waiting for: ${waiting.map(i=>`P${i+1} ${PLAYER_NAMES[i]}`).join(", ")}.`
+    :anyTie?"Tied players roll again to settle their order."
+    :all.length?"Final order for this round: higher Victory Points first, then the lowest roll.":"";
+  const btns=$("initbtns");btns.textContent="";
+  const mine=mySeat();
+  if(mine>=0&&canControl(mine)){
+    const me=all.find(e=>e.seat===mine),b=document.createElement("button");b.className="sbtn solid";
+    if(!me)b.textContent="Roll Initiative";else if(needsTiebreak(me,all))b.textContent="Roll Initiative (tiebreak)";else{b.textContent="Rolled";b.disabled=true;}
+    b.onclick=()=>rollInit(mine);btns.appendChild(b);
+  }
+  if(isAdminUser()){
+    const sel=document.createElement("select");sel.className="actsel";sel.setAttribute("aria-label","Player to roll initiative for");
+    sel.innerHTML=PLAYER_NAMES.map((n,i)=>`<option value="${i}">P${i+1} · ${n}</option>`).join("");
+    if(initPick!=null)sel.value=String(initPick);sel.onchange=()=>{initPick=+sel.value;};
+    const rb=document.createElement("button");rb.className="sbtn";rb.textContent="Roll for player";rb.onclick=()=>{initPick=+sel.value;rollInit(+sel.value);};
+    const cb=document.createElement("button");cb.className="sbtn";cb.textContent="Clear initiative";cb.onclick=()=>armed(cb,"Clear initiative",clearInit);
+    const adm=document.createElement("div");adm.className="initadmin";adm.append(sel,rb,cb);btns.appendChild(adm);
+  }
+}
+
 /* ----- lance rosters (4 mechs per lance) ----- */
 const rosterPending={};let rosterT=null;
 function applyPending(){Object.keys(rosterPending).forEach(i=>{const s=clone(seat(+i));Object.entries(rosterPending[i]).forEach(([n,p])=>{if(p.roster)s.mechs[n].roster=p.roster;if(p.walk)s.mechs[n].walk=p.walk;if(typeof p.subtitle==="string")s.mechs[n].subtitle=p.subtitle;});s.epoch=game.epoch;rawSeats[+i]=s;});}
@@ -534,7 +634,8 @@ function renderInspect(){
       add("meta",`${fmt(remOf(m))} of ${fmt(allowance(m))} MP left this turn. ${canControl(selected.seat)?"Click a highlighted hex to move.":"Belongs to another player."}`);
     }else add("meta",canControl(selected.seat)?"No action chosen. Pick one in the Lances panel to move.":"No action chosen yet. Belongs to another player.");
     const ro=(m.roster||[]).filter(x=>x&&x.trim());
-    if(ro.length){const ol=document.createElement("ol");ol.className="rlist";(m.roster||[]).forEach((x,k)=>{if(!x||!x.trim())return;const li=document.createElement("li");const wv=(m.walk||[])[k];li.textContent=x+(typeof wv==="number"?` (Walk ${fmt(wv)})`:"");ol.appendChild(li);});insp.appendChild(ol);}
+    if(ro.length){const ol=document.createElement("ol");ol.className="rlist";(m.roster||[]).forEach((x,k)=>{if(!x||!x.trim())return;const li=document.createElement("li");const wv=(m.walk||[])[k];
+      const t=document.createElement("span");t.textContent=x+(typeof wv==="number"?` (Walk ${fmt(wv)})`:"")+" · XP";li.append(t,xpCell(selected.seat,selected.mech,k));ol.appendChild(li);});insp.appendChild(ol);}
     else add("meta","Lance roster not filled in yet.");
     if(hoverCell&&reachMap){const cost=reachMap.get(hoverCell);const [n]=describe(RES.map.get(hoverCell));add("meta",cost!=null?`${n}: costs ${fmt(cost)} MP to reach`:`${n}: out of reach`);}
   }
@@ -718,7 +819,7 @@ function renderSeats(){
     else if(s.owner===myId){btn.textContent="Leave";btn.disabled=!canWrite;btn.onclick=()=>leaveSeat(i);}
     else if(isEditor&&canWrite){btn.textContent="Free seat";btn.onclick=()=>leaveSeat(i);}
     else btn.style.display="none";
-    row.appendChild(btn);box.appendChild(row);
+    row.appendChild(vpBox(i));row.appendChild(btn);box.appendChild(row);
   }
   $("modenote").textContent=live
     ?(canWrite?(myId?"Take a seat to command its Dropship and lances. Everyone sees moves live.":"Sign in to take a seat."):"You're viewing this game; you can't move lances.")
@@ -763,7 +864,7 @@ function renderMechs(){
     const rule=document.createElement("div");rule.className="actrule";rule.textContent=(lowestWalk(m)?`MP ${fmt(mpOf(m))} from the lowest Walk MV. `:"")+(ACTIONS[m.action]?ACTIONS[m.action].rule+(holdBonus(m)?" Holding: green plus active.":""):"Choose an action to move this lance.");
     const ro=document.createElement("div");ro.className="roster";
     const rl=document.createElement("div");rl.className="rl";rl.textContent="Lance roster";ro.appendChild(rl);
-    const hn=document.createElement("div");hn.className="mvh";hn.textContent="Mech";const hv=document.createElement("div");hv.className="mvh";hv.textContent="Walk MV (sets MP)";ro.append(hn,hv);
+    const hn=document.createElement("div");hn.className="mvh";hn.textContent="Mech";const hv=document.createElement("div");hv.className="mvh";hv.textContent="Walk MV";const hx=document.createElement("div");hx.className="mvh";hx.style.textAlign="right";hx.textContent="XP";ro.append(hn,hv,hx);
     const blur=()=>{flushRoster();setTimeout(()=>{if(!list.contains(document.activeElement)||document.activeElement.tagName!=="INPUT")renderMechs();},0);};
     for(let k=0;k<4;k++){const inp=document.createElement("input");inp.type="text";inp.maxLength=60;inp.placeholder=`Mech ${k+1}`;
       inp.setAttribute("aria-label",`${name} Lance, mech ${k+1}`);inp.value=((m.roster||[])[k])||"";inp.disabled=!ctl;
@@ -771,13 +872,13 @@ function renderMechs(){
       const mv=document.createElement("input");mv.type="number";mv.min="0";mv.max="20";mv.step="0.5";mv.inputMode="decimal";mv.placeholder="–";
       mv.setAttribute("aria-label",`${name} Lance, mech ${k+1} Walk MV`);const wv=(m.walk||[])[k];mv.value=typeof wv==="number"?String(wv):"";mv.disabled=!ctl;
       mv.addEventListener("input",()=>setWalk(i,name,k,mv.value));mv.addEventListener("blur",blur);
-      ro.append(inp,mv);}
+      ro.append(inp,mv,xpCell(i,name,k));}
     row.append(tok,nm,st,meta,act,rule,ro);list.appendChild(row);
   });
   $("refill").disabled=!ctl;
 }
 
-function refreshAll(){drawOverlay();renderSeats();renderMechs();renderInspect();
+function refreshAll(){drawOverlay();renderSeats();renderMechs();renderInspect();renderInit();
   $("mapctl").style.display=(!live||(isEditor&&canWrite))?"contents":"none";}
 
 function loadMap(seed){
@@ -844,7 +945,7 @@ loadMap(game.seed);
   if(u){myId=await u.id();isEditor=await u.canEdit();const cw=await u.can("data.write");canWrite=cw!==false;}
   else{canWrite=true;isEditor=false;}
   window.__hexSetAdmin=v=>{isEditor=!!v;refreshAll();};
-  live=true;rawSeats=new Array(NC).fill(null);selected=null;refreshAll();
+  live=true;rawSeats=new Array(NC).fill(null);scores=new Array(NC).fill(null);inits=new Array(NC).fill(null);selected=null;refreshAll();
   let initTried=false;
   db.doc("game/state").onSnapshot(snap=>{
     if(!snap.exists){
@@ -863,5 +964,8 @@ loadMap(game.seed);
     if(selected&&!canControl(selected.seat)&&live&&seat(selected.seat).owner!==myId){/* keep viewing */}
     refreshAll();resolveNames();
   },()=>toast("Lost the live connection. Reload to reconnect."));
+  const bySeat=qs=>{const n=new Array(NC).fill(null);qs.docs.forEach(doc=>{const m=/^p(\d)$/.exec(doc.id);if(m&&+m[1]>=1&&+m[1]<=NC)n[+m[1]-1]=doc.data();});return n;};
+  db.collection("scores").onSnapshot(qs=>{scores=bySeat(qs);refreshAll();},()=>{});
+  db.collection("init").onSnapshot(qs=>{inits=bySeat(qs);refreshAll();},()=>{});
 })();
 })();
