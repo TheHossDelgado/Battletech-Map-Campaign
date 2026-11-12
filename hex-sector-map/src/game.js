@@ -416,7 +416,32 @@ function reach(si,name){
   }
   best.delete(start);return best;
 }
+/* ----- Air Drop: a lance ending its move on an Air Base its player owns may drop to any non-Dropship hex ----- */
+let airdropMode=null; // {seat,mech} while choosing a drop hex
+function airDropOk(i,name){
+  if(!RES)return false;const m=seat(i).mechs[name];
+  if(!m||m.airdropped||m.done||!ACTIONS[m.action]||!canControl(i)||!canMoveLance(i,name))return false;
+  const c=byKey.get(key(m.q,m.r)),d=RES.map.get(c),hs=hexState(c);
+  return d.kind==="Special"&&d.name==="Air Base"&&hs.owner===i&&!hs.special;
+}
+const airDropTarget=c=>RES.map.get(c).kind!=="Dropship";
+function startAirDrop(i,name){
+  if(!airDropOk(i,name))return;
+  airdropMode={seat:i,mech:name};selected={seat:i,mech:name};refreshAll();
+  toast("Air Drop: tap any hex except a Dropship. Esc cancels.");
+}
+function doAirDrop(c){
+  const {seat:i,mech:name}=airdropMode;airdropMode=null;
+  if(!airDropOk(i,name)||!airDropTarget(c)){refreshAll();return;}
+  const s=clone(seat(i)),m=s.mechs[name];if(m.q===c.q&&m.r===c.r){refreshAll();return;}
+  const sp=spentOf(m);m.prev={q:m.q,r:m.r,spent:sp,ad:true};m.q=c.q;m.r=c.r;
+  m.spent=Math.max(sp,allowance(m));m.airdropped=true;delete m.rem;
+  writeSeat(i,s);
+  toast(`${name} Lance air-dropped to ${describe(RES.map.get(c))[0]} (${c.q}, ${c.r}).`);
+}
+
 function selectMech(i,m){
+  airdropMode=null;
   if(selected&&selected.seat===i&&selected.mech===m)selected=null;else selected={seat:i,mech:m};
   if(!live&&selected)localSeat=i;
   refreshAll();
@@ -426,8 +451,9 @@ function moveTo(c){
   const s=clone(seat(i)),m=s.mechs[name];
   const sp=spentOf(m);m.prev={q:m.q,r:m.r,spent:sp};m.q=c.q;m.r=c.r;m.spent=Math.round((sp+cost)*10)/10;delete m.rem;
   writeSeat(i,s);
+  if(airDropOk(i,name))toast(`${name} Lance is on your Air Base: Air Drop is available.`);
 }
-function undo(i,name){const s=clone(seat(i)),m=s.mechs[name];if(!m.prev)return;m.q=m.prev.q;m.r=m.prev.r;m.spent=typeof m.prev.spent==="number"?m.prev.spent:(typeof m.prev.rem==="number"?Math.max(0,m.mp-m.prev.rem):0);delete m.rem;m.prev=null;writeSeat(i,s);}
+function undo(i,name){const s=clone(seat(i)),m=s.mechs[name];if(!m.prev)return;m.q=m.prev.q;m.r=m.prev.r;m.spent=typeof m.prev.spent==="number"?m.prev.spent:(typeof m.prev.rem==="number"?Math.max(0,m.mp-m.prev.rem):0);delete m.rem;if(m.prev.ad)delete m.airdropped;m.prev=null;writeSeat(i,s);}
 function setMP(i,name,delta){const s=clone(seat(i)),m=s.mechs[name];const mp=Math.min(MAX_MP,Math.max(0,m.mp+delta));const d=mp-m.mp;if(!d)return;m.spent=spentOf(m);delete m.rem;m.mp=mp;writeSeat(i,s);}
 /* ----- victory points, XP and initiative ----- */
 let initPick=null,initOrder=null; // initOrder: seats in an order an admin set by hand, or null
@@ -538,7 +564,7 @@ function confirmTurn(i,name){
   const s=clone(seat(i)),m=s.mechs[name];if(!m||m.done||!ACTIONS[m.action])return;
   m.done=true;m.prev=null;writeSeat(i,s,true);
   const [hn]=describe(RES.map.get(byKey.get(key(m.q,m.r))));
-  const t=turnState();t.log.push({seat:i,turn:t.turn,lance:name,action:m.action,q:m.q,r:m.r,hex:hn});
+  const t=turnState();t.log.push({seat:i,turn:t.turn,lance:name,action:m.action,q:m.q,r:m.r,hex:hn,airdrop:!!m.airdropped});
   writeTurn(advanceTurn(t));
   toast(`P${i+1} ${PLAYER_NAMES[i]}: ${name} Lance · ${m.action} → ${hn}`);
 }
@@ -566,7 +592,7 @@ function renderInit(){
     if(tie){const t=document.createElement("span");t.className="tietag";t.textContent="Tied: roll again";who.appendChild(t);}
     const logs=ts.log.filter(x=>x.seat===e.seat);let logBox=null;
     if(logs.length){logBox=document.createElement("div");logBox.className="turnlogs";logs.forEach(x=>{const l=document.createElement("span");l.className="turnlog";
-      l.textContent=x.skipped?`T${x.turn} · skipped`:`T${x.turn} · ${x.lance} · ${x.action} → ${x.hex} (${x.q}, ${x.r})`;logBox.appendChild(l);});}
+      l.textContent=x.skipped?`T${x.turn} · skipped`:`T${x.turn} · ${x.lance} · ${x.action} ${x.airdrop?"✈ Air Drop → ":"→ "}${x.hex} (${x.q}, ${x.r})`;logBox.appendChild(l);});}
     const r=document.createElement("div");r.className="initroll";r.textContent=String(e.roll);
     if(e.d.length===2){const dd=document.createElement("div");dd.className="initsub";dd.textContent=`${e.d[0]} + ${e.d[1]}`;r.appendChild(dd);}
     if(adminView){
@@ -582,6 +608,7 @@ function renderInit(){
         const mvd=movedLance(e.seat),sm=seat(e.seat).mechs;
         if(mvd){
           const cb=document.createElement("button");cb.className="sbtn solid";cb.textContent=`Confirm ${mvd} Lance · ${sm[mvd].action}`;cb.onclick=()=>confirmTurn(e.seat,mvd);box.appendChild(cb);
+          if(airDropOk(e.seat,mvd)){const ab=document.createElement("button");ab.className="sbtn airbtn";ab.textContent="✈ Air Drop";ab.onclick=()=>startAirDrop(e.seat,mvd);box.appendChild(ab);}
         }else{
           const ready=MECHS.filter(n=>!sm[n].done&&ACTIONS[sm[n].action]);
           if(ready.length){
@@ -646,7 +673,7 @@ function renderRound(){
 function newRoundReset(){
   for(let i=0;i<NC;i++){
     const s=clone(seat(i));let ch=false;
-    MECHS.forEach(n=>{const m=s.mechs[n];if(spentOf(m)||m.action||m.prev||m.done||typeof m.rem==="number"){m.spent=0;delete m.rem;m.prev=null;m.action=null;delete m.done;ch=true;}});
+    MECHS.forEach(n=>{const m=s.mechs[n];if(spentOf(m)||m.action||m.prev||m.done||m.airdropped||typeof m.rem==="number"){m.spent=0;delete m.rem;m.prev=null;m.action=null;delete m.done;delete m.airdropped;ch=true;}});
     if(ch)writeSeat(i,s,true);
   }
   clearInit();selected=null;refreshAll();
@@ -674,7 +701,7 @@ function setWalk(i,name,k,v){
   clearTimeout(rosterT);rosterT=setTimeout(flushRoster,700);
 }
 function flushRoster(){clearTimeout(rosterT);Object.keys(rosterPending).forEach(i=>{applyPending();delete rosterPending[i];writeSeat(+i,clone(seat(+i)),true);});drawOverlay();renderInspect();}
-function refill(i){const s=clone(seat(i));MECHS.forEach(n=>{s.mechs[n].spent=0;delete s.mechs[n].rem;s.mechs[n].prev=null;});writeSeat(i,s);}
+function refill(i){const s=clone(seat(i));MECHS.forEach(n=>{s.mechs[n].spent=0;delete s.mechs[n].rem;delete s.mechs[n].airdropped;s.mechs[n].prev=null;});writeSeat(i,s);}
 function hexClick(c){
   pinnedCell=c;
   if(selected&&reachMap&&reachMap.has(c)&&canControl(selected.seat)){moveTo(c);return;}
@@ -719,7 +746,11 @@ const DOFFS={1:[[0,21]],2:[[-23,4],[23,4]],3:[[-23,4],[23,4],[0,21]]};
 function drawOverlay(){
   const reachG=$("reach"),tokG=$("tokens");if(!reachG)return;
   reachMap=null;let rs="";
-  if(selected&&canControl(selected.seat)&&canMoveLance(selected.seat,selected.mech)){
+  if(airdropMode){
+    const cur=seat(airdropMode.seat).mechs[airdropMode.mech];
+    CELLS.forEach(c=>{if(!airDropTarget(c)||(c.q===cur.q&&c.r===cur.r))return;
+      rs+=`<g transform="translate(${c.x.toFixed(1)},${c.y.toFixed(1)})"><polygon points="${hexPts(S-4)}" fill="rgba(90,170,255,.22)" stroke="#3e7bfa" stroke-width="2.5" stroke-dasharray="5 4"/><path d="M0 -33L1.2 -29.3L5.6 -26.8V-26L1.2 -27L.9 -24.5L2.3 -23.6V-23L0 -23.5L-2.3 -23V-23.6L-.9 -24.5L-1.2 -27L-5.6 -26V-26.8L-1.2 -29.3Z" fill="#3e7bfa"/></g>`;});
+  }else if(selected&&canControl(selected.seat)&&canMoveLance(selected.seat,selected.mech)){
     reachMap=reach(selected.seat,selected.mech);
     const col=PLAYER_COLORS[selected.seat];
     reachMap.forEach((cost,c)=>{
@@ -734,7 +765,7 @@ function drawOverlay(){
       const [ox,oy]=offs[j%offs.length],col=PLAYER_COLORS[o.seat],m=seat(o.seat).mechs[o.mech];
       const rem=remOf(m),act=ACTIONS[m.action],lab=act?fmt(rem):"–",w=lab.length*5.2+7,spent=act&&rem<allowance(m),sc=isDrop?(oy>15?.85:.95):(nn>=4?.8:nn>=3?1.05:1.25),[bx,by]=isDrop?(oy>15?[9,-8]:ox<0?[-5-w,-25]:[5,-25]):[5,-25];
       const sel=selected&&selected.seat===o.seat&&selected.mech===o.mech;
-      ts+=`<g class="mech"${m.done?' opacity=".55"':""} data-mech="${o.seat}:${o.mech}" tabindex="0" role="button" aria-label="${PLAYER_NAMES[o.seat]} ${o.mech} Lance, ${act?m.action+", "+fmt(rem)+" of "+fmt(allowance(m))+" movement points left":"no action chosen"}" transform="translate(${(c.x+ox).toFixed(1)},${(c.y+oy).toFixed(1)}) scale(${sc})">
+      ts+=`<g class="mech" data-mech="${o.seat}:${o.mech}" tabindex="0" role="button" aria-label="${PLAYER_NAMES[o.seat]} ${o.mech} Lance, ${act?m.action+", "+fmt(rem)+" of "+fmt(allowance(m))+" movement points left":"no action chosen"}" transform="translate(${(c.x+ox).toFixed(1)},${(c.y+oy).toFixed(1)}) scale(${sc})">
         ${sel?mechShape("#f2b134","#f2b134",2.8):""}
         ${mechShape(col,"#141414",1.1)}
         <g transform="translate(0,-4.4)"><circle r="5.4" fill="#fff" stroke="#141414" stroke-width="1"/><text y="3" text-anchor="middle" font-family="Chakra Petch, Arial, sans-serif" font-size="8.4" font-weight="700" fill="#1e2b36">${o.mech[0]}</text></g>
@@ -760,6 +791,11 @@ function renderInspect(){
       add("meta",`Action: ${m.action}${holdBonus(m)?" (+ holding position)":""}. ${ACTIONS[m.action].rule}`);
       add("meta",`${fmt(remOf(m))} of ${fmt(allowance(m))} MP left this turn. ${canControl(selected.seat)?"Click a highlighted hex to move.":"Belongs to another player."}`);
       {const why=canControl(selected.seat)?moveBlockReason(selected.seat,selected.mech):"";if(why)add("dmgtxt",why);}
+      if(m.airdropped)add("meta","✈ Air-dropped this turn.");
+      if(airDropOk(selected.seat,selected.mech)){const ab=document.createElement("button");ab.className="sbtn solid airbtn";
+        const on=airdropMode&&airdropMode.seat===selected.seat&&airdropMode.mech===selected.mech;
+        ab.textContent=on?"Cancel Air Drop":"✈ Air Drop";ab.onclick=()=>{if(on){airdropMode=null;refreshAll();}else startAirDrop(selected.seat,selected.mech);};
+        const w=document.createElement("div");w.style.marginTop="6px";w.appendChild(ab);insp.appendChild(w);}
     }else add("meta",canControl(selected.seat)?"No action chosen. Pick one in the Lances panel to move.":"No action chosen yet. Belongs to another player.");
     const ro=(m.roster||[]).filter(x=>x&&x.trim());
     if(ro.length){const ol=document.createElement("ol");ol.className="rlist";(m.roster||[]).forEach((x,k)=>{if(!x||!x.trim())return;const li=document.createElement("li");const wv=(m.walk||[])[k];
@@ -1042,6 +1078,12 @@ $("refill").addEventListener("click",()=>{const i=mySeat();if(i>=0&&canControl(i
 /* ----- board interaction ----- */
 const svgEl=$("map");
 svgEl.addEventListener("click",e=>{
+  if(airdropMode){
+    const h=e.target.closest(".hexcell"),tk=e.target.closest("[data-mech]");let c=null;
+    if(h)c=CELLS[+h.dataset.i];else if(tk){const [i,m]=tk.dataset.mech.split(":");const mm=seat(+i).mechs[m];c=byKey.get(key(mm.q,mm.r));}
+    if(c&&airDropTarget(c))doAirDrop(c);else{airdropMode=null;refreshAll();}
+    return;
+  }
   const t=e.target.closest("[data-mech]");
   if(t){const [i,m]=t.dataset.mech.split(":");const c=byKey.get(key(seat(+i).mechs[m].q,seat(+i).mechs[m].r));
     if(selected&&reachMap&&reachMap.has(c)&&!(selected.seat===+i&&selected.mech===m)){moveTo(c);return;}
@@ -1051,7 +1093,7 @@ svgEl.addEventListener("click",e=>{
 const hov=e=>{const h=e.target.closest(".hexcell");if(h){const c=CELLS[+h.dataset.i];if(c!==hoverCell){hoverCell=c;renderInspect();markCells();}}};
 svgEl.addEventListener("mouseover",hov);svgEl.addEventListener("focusin",hov);
 svgEl.addEventListener("keydown",e=>{
-  if(e.key==="Escape"){selected=null;pinnedCell=null;refreshAll();return;}
+  if(e.key==="Escape"){airdropMode=null;selected=null;pinnedCell=null;refreshAll();return;}
   if(e.key==="Enter"||e.key===" "){const t=e.target.closest("[data-mech]")||e.target.closest(".hexcell");if(t){e.preventDefault();t.dispatchEvent(new MouseEvent("click",{bubbles:true}));}}
 });
 
