@@ -471,7 +471,8 @@ function initEntries(){const out=[];for(let i=0;i<NC;i++){const r=inits[i];if(r&
 function tiedSoFar(a,b){if(a.vp!==b.vp||a.roll!==b.roll)return false;const n=Math.min(a.tb.length,b.tb.length);for(let k=0;k<n;k++)if(a.tb[k]!==b.tb[k])return false;return true;}
 function needsTiebreak(e,all){return all.some(o=>o!==e&&tiedSoFar(e,o)&&o.tb.length>=e.tb.length);}
 function cmpInit(a,b){if(a.vp!==b.vp)return b.vp-a.vp;if(a.roll!==b.roll)return a.roll-b.roll;const n=Math.min(a.tb.length,b.tb.length);for(let k=0;k<n;k++)if(a.tb[k]!==b.tb[k])return a.tb[k]-b.tb[k];return a.seat-b.seat;}
-function participants(){const out=[];for(let i=0;i<NC;i++)if(!live||seat(i).owner)out.push(i);return out;}
+// Every one of the six players must roll before anyone can act (an admin can roll for an empty seat)
+function participants(){const out=[];for(let i=0;i<NC;i++)out.push(i);return out;}
 function writeInit(i,data){
   inits[i]=data;refreshAll();if(!live)return;
   const path=`init/p${i+1}`;
