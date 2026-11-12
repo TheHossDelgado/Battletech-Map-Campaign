@@ -499,25 +499,73 @@ function moveInit(seatI,dir){
   if(k<0||j<0||j>=order.length)return;
   [order[k],order[j]]=[order[j],order[k]];writeInitOrder(order);
 }
-function clearInit(){for(let i=0;i<NC;i++)if(inits[i])writeInit(i,null);if(initOrder)writeInitOrder(null);}
+function clearInit(){for(let i=0;i<NC;i++)if(inits[i])writeInit(i,null);if(initOrder)writeInitOrder(null);if(turnDoc)writeTurn(null);}
+/* ----- turns: 3 per round; on each turn the active player acts with one unused lance ----- */
+const TURNS=3;
+let turnDoc=null; // {turn, idx, log:[{seat,turn,lance,action,q,r,hex}|{seat,turn,skipped}], complete}
+function turnState(){const t=turnDoc||{};return{turn:Number.isInteger(t.turn)&&t.turn>=1?Math.min(TURNS,t.turn):1,idx:Number.isInteger(t.idx)&&t.idx>=0?t.idx:0,log:Array.isArray(t.log)?t.log.slice():[],complete:!!t.complete};}
+function initOrderFinal(){
+  const all=initEntries();if(!all.length)return false;
+  if(participants().some(i=>!inits[i]||typeof inits[i].roll!=="number"))return false;
+  return !!initOrder||!all.some(e=>needsTiebreak(e,all));
+}
+function turnOrder(){return sortedInit(initEntries()).map(e=>e.seat);}
+function turnsActive(){return initOrderFinal()&&!turnState().complete;}
+function activeSeat(){if(!turnsActive())return null;const o=turnOrder(),t=turnState();return o[Math.min(t.idx,o.length-1)];}
+function movedLance(i){const s=seat(i);return MECHS.find(n=>!s.mechs[n].done&&spentOf(s.mechs[n])>0)||null;}
+function canMoveLance(i,name){
+  if(!turnsActive())return true;
+  if(i!==activeSeat())return false;
+  if(seat(i).mechs[name].done)return false;
+  const mv=movedLance(i);return !mv||mv===name;
+}
+function moveBlockReason(i,name){
+  if(!turnsActive())return "";
+  const a=activeSeat();if(i!==a)return `Waiting: it's P${a+1} ${PLAYER_NAMES[a]}'s turn.`;
+  if(seat(i).mechs[name].done)return "This lance has already acted this round.";
+  const mv=movedLance(i);if(mv&&mv!==name)return `${mv} Lance already moved this turn. Confirm it in the Initiative panel.`;
+  return "";
+}
+function writeTurn(t){
+  turnDoc=t;refreshAll();if(!live)return;
+  const path="init/turn";
+  queues[path]=(queues[path]||Promise.resolve()).then(()=>t?db.doc(path).set(JSON.parse(JSON.stringify(t))):db.doc(path).delete()).catch(handleWriteErr);
+}
+function advanceTurn(t){const n=turnOrder().length;t.idx++;if(t.idx>=n){if(t.turn<TURNS){t.turn++;t.idx=0;}else{t.complete=true;t.idx=Math.max(0,n-1);}}return t;}
+function confirmTurn(i,name){
+  if(activeSeat()!==i)return;
+  const s=clone(seat(i)),m=s.mechs[name];if(!m||m.done||!ACTIONS[m.action])return;
+  m.done=true;m.prev=null;writeSeat(i,s,true);
+  const [hn]=describe(RES.map.get(byKey.get(key(m.q,m.r))));
+  const t=turnState();t.log.push({seat:i,turn:t.turn,lance:name,action:m.action,q:m.q,r:m.r,hex:hn});
+  writeTurn(advanceTurn(t));
+  toast(`P${i+1} ${PLAYER_NAMES[i]}: ${name} Lance · ${m.action} → ${hn}`);
+}
+function skipTurn(){if(!isAdminUser()||!turnsActive())return;const t=turnState();t.log.push({seat:activeSeat(),turn:t.turn,skipped:true});writeTurn(advanceTurn(t));}
+
 function renderInit(){
   const list=$("initlist");if(!list)return;list.textContent="";
   const all=sortedInit(initEntries()),parts=participants(),adminView=isAdminUser();
   const waiting=parts.filter(i=>!inits[i]||typeof inits[i].roll!=="number");
+  const final=initOrderFinal(),ts=turnState(),act=activeSeat();
+  $("turnlabel").textContent=final?(ts.complete?" · all turns done":` · Turn ${ts.turn} of ${TURNS}`):"";
   let pos=0;
   all.forEach((e,idx)=>{
     const tie=!initOrder&&needsTiebreak(e,all),prev=all[idx-1];
     const sameAsPrev=!initOrder&&!!(prev&&tiedSoFar(prev,e));
     if(!sameAsPrev)pos=idx+1;
-    const row=document.createElement("div");row.className="initrow";
+    const row=document.createElement("div");row.className="initrow"+(e.seat===act?" active":"");
     const p=document.createElement("span");p.className="initpos";p.textContent=sameAsPrev?"=":String(pos);
     const dot=document.createElement("span");dot.className="dot";dot.style.background=PLAYER_COLORS[e.seat];
     const who=document.createElement("div");who.className="who";
-    const b=document.createElement("b");b.textContent=`P${e.seat+1} · ${PLAYER_NAMES[e.seat]}`;
+    const b=document.createElement("b");b.textContent=`P${e.seat+1} · ${PLAYER_NAMES[e.seat]}${e.seat===act?" · acting":""}`;
     const sub=document.createElement("span");const so=seat(e.seat).owner;
     sub.textContent=`${e.vp} VP${so&&names[so]?" · "+names[so]:""}${e.tb.length?" · tiebreak "+e.tb.join(", "):""}`;
     who.append(b,sub);
     if(tie){const t=document.createElement("span");t.className="tietag";t.textContent="Tied: roll again";who.appendChild(t);}
+    const logs=ts.log.filter(x=>x.seat===e.seat);let logBox=null;
+    if(logs.length){logBox=document.createElement("div");logBox.className="turnlogs";logs.forEach(x=>{const l=document.createElement("span");l.className="turnlog";
+      l.textContent=x.skipped?`T${x.turn} · skipped`:`T${x.turn} · ${x.lance} · ${x.action} → ${x.hex} (${x.q}, ${x.r})`;logBox.appendChild(l);});}
     const r=document.createElement("div");r.className="initroll";r.textContent=String(e.roll);
     if(e.d.length===2){const dd=document.createElement("div");dd.className="initsub";dd.textContent=`${e.d[0]} + ${e.d[1]}`;r.appendChild(dd);}
     if(adminView){
@@ -526,23 +574,47 @@ function renderInit(){
       mv.append(tinyBtn("▲",`Move P${e.seat+1} up`,()=>moveInit(e.seat,-1),idx===0),tinyBtn("▼",`Move P${e.seat+1} down`,()=>moveInit(e.seat,1),idx===all.length-1));
       row.append(p,dot,who,r,mv);
     }else row.append(p,dot,who,r);
+    if(logBox)row.appendChild(logBox);
+    if(e.seat===act){
+      const box=document.createElement("div");box.className="initact";
+      if(canControl(e.seat)||adminView){
+        const mvd=movedLance(e.seat),sm=seat(e.seat).mechs;
+        if(mvd){
+          const cb=document.createElement("button");cb.className="sbtn solid";cb.textContent=`Confirm ${mvd} Lance · ${sm[mvd].action}`;cb.onclick=()=>confirmTurn(e.seat,mvd);box.appendChild(cb);
+        }else{
+          const ready=MECHS.filter(n=>!sm[n].done&&ACTIONS[sm[n].action]);
+          if(ready.length){
+            const sel=document.createElement("select");sel.className="actsel";sel.setAttribute("aria-label","Lance to confirm without moving");
+            sel.innerHTML=ready.map(n=>`<option value="${n}">${n} · ${sm[n].action}</option>`).join("");
+            const cb=document.createElement("button");cb.className="sbtn";cb.textContent="Confirm without moving";cb.onclick=()=>confirmTurn(e.seat,sel.value);
+            box.append(sel,cb);
+          }
+          const h=document.createElement("span");h.className="initsub";h.textContent="Choose an action for a lance that hasn't acted, move it, then confirm here.";box.appendChild(h);
+        }
+      }else{const h=document.createElement("span");h.className="initsub";h.textContent="Taking their turn…";box.appendChild(h);}
+      row.appendChild(box);
+    }
     list.appendChild(row);
   });
   if(!all.length){const n=document.createElement("p");n.className="note";n.style.margin="0";n.textContent="No one has rolled this round.";list.appendChild(n);}
   const anyTie=!initOrder&&all.some(e=>needsTiebreak(e,all));
   $("initnote").textContent=waiting.length?`Waiting for: ${waiting.map(i=>`P${i+1} ${PLAYER_NAMES[i]}`).join(", ")}.`
     :anyTie?"Tied players roll again to settle their order."
-    :initOrder&&all.length?"Final order for this round, as adjusted by an admin."
-    :all.length?"Final order for this round: higher Victory Points first, then the lowest roll.":"";
+    :ts.complete&&final?`All ${TURNS} turns are done. An admin can start the next round.`
+    :act!=null?`Turn ${ts.turn} of ${TURNS}: P${act+1} ${PLAYER_NAMES[act]} acts with one lance, then confirms.`
+    :all.length?"Final order for this round.":"";
   if(initOrder&&waiting.length)$("initnote").textContent+=" Order adjusted by an admin.";
   const btns=$("initbtns");btns.textContent="";
   const mine=mySeat();
   if(mine>=0&&canControl(mine)){
-    const me=all.find(e=>e.seat===mine),b=document.createElement("button");b.className="sbtn solid";
-    if(!me)b.textContent="Roll Initiative";else if(!initOrder&&needsTiebreak(me,all))b.textContent="Roll Initiative (tiebreak)";else{b.textContent="Rolled";b.disabled=true;}
-    b.onclick=()=>rollInit(mine);btns.appendChild(b);
+    const me=all.find(e=>e.seat===mine);
+    if(!me||(!initOrder&&needsTiebreak(me,all))||!final){
+      const b=document.createElement("button");b.className="sbtn solid";
+      if(!me)b.textContent="Roll Initiative";else if(!initOrder&&needsTiebreak(me,all))b.textContent="Roll Initiative (tiebreak)";else{b.textContent="Rolled";b.disabled=true;}
+      b.onclick=()=>rollInit(mine);btns.appendChild(b);
+    }
   }
-  if(isAdminUser()){
+  if(adminView){
     const sel=document.createElement("select");sel.className="actsel";sel.setAttribute("aria-label","Player to roll initiative for");
     sel.innerHTML=PLAYER_NAMES.map((n,i)=>`<option value="${i}">P${i+1} · ${n}</option>`).join("");
     if(initPick!=null)sel.value=String(initPick);sel.onchange=()=>{initPick=+sel.value;};
@@ -550,9 +622,37 @@ function renderInit(){
     const cb=document.createElement("button");cb.className="sbtn";cb.textContent="Clear initiative";cb.onclick=()=>armed(cb,"Clear initiative",clearInit);
     const adm=document.createElement("div");adm.className="initadmin";adm.append(sel,rb,cb);
     if(initOrder){const ub=document.createElement("button");ub.className="sbtn";ub.textContent="Use rolled order";ub.onclick=()=>writeInitOrder(null);adm.appendChild(ub);}
+    if(act!=null){const sk=document.createElement("button");sk.className="sbtn";sk.textContent="Skip turn";sk.onclick=()=>armed(sk,"Skip turn",skipTurn,"Confirm?");adm.appendChild(sk);}
     btns.appendChild(adm);
   }
 }
+
+/* ----- round tracker (admin sets it; everyone sees it) ----- */
+let round=1;
+function writeRound(n){
+  round=Math.max(1,Math.min(999,Math.round(+n)||1));refreshAll();if(!live)return;
+  const path="game/round",data={round};
+  const go=typeof window.__hexAdminRound==="function"?()=>window.__hexAdminRound(data.round):()=>db.doc(path).set(data);
+  queues[path]=(queues[path]||Promise.resolve()).then(go).catch(e=>toast((e&&e.message)||"Couldn't save that change."));
+}
+function renderRound(){
+  if(!$("roundbox"))return;const adm=isAdminUser(),inp=$("roundset");
+  $("roundnum").textContent=String(round);
+  $("roundnum").style.display=adm?"none":"";inp.style.display=adm?"":"none";$("nextround").style.display=adm?"":"none";
+  if(document.activeElement!==inp)inp.value=String(round);
+}
+// Next round: advance the counter, refill every lance's MP, clear every lance's action, and clear initiative
+function newRoundReset(){
+  for(let i=0;i<NC;i++){
+    const s=clone(seat(i));let ch=false;
+    MECHS.forEach(n=>{const m=s.mechs[n];if(spentOf(m)||m.action||m.prev||m.done||typeof m.rem==="number"){m.spent=0;delete m.rem;m.prev=null;m.action=null;delete m.done;ch=true;}});
+    if(ch)writeSeat(i,s,true);
+  }
+  clearInit();selected=null;refreshAll();
+}
+$("nextround").addEventListener("click",e=>{if(!isAdminUser())return;armed(e.currentTarget,"Next round",()=>{writeRound(round+1);newRoundReset();toast(`Round ${round}: movement refilled, actions and initiative cleared.`);},"Confirm?");});
+$("roundset").addEventListener("change",e=>{if(isAdminUser())writeRound(e.target.value);});
+$("roundset").addEventListener("keydown",e=>{if(e.key==="Enter")e.target.blur();});
 
 /* ----- lance rosters (4 mechs per lance) ----- */
 const rosterPending={};let rosterT=null;
@@ -618,7 +718,7 @@ const DOFFS={1:[[0,21]],2:[[-23,4],[23,4]],3:[[-23,4],[23,4],[0,21]]};
 function drawOverlay(){
   const reachG=$("reach"),tokG=$("tokens");if(!reachG)return;
   reachMap=null;let rs="";
-  if(selected&&canControl(selected.seat)){
+  if(selected&&canControl(selected.seat)&&canMoveLance(selected.seat,selected.mech)){
     reachMap=reach(selected.seat,selected.mech);
     const col=PLAYER_COLORS[selected.seat];
     reachMap.forEach((cost,c)=>{
@@ -633,7 +733,7 @@ function drawOverlay(){
       const [ox,oy]=offs[j%offs.length],col=PLAYER_COLORS[o.seat],m=seat(o.seat).mechs[o.mech];
       const rem=remOf(m),act=ACTIONS[m.action],lab=act?fmt(rem):"–",w=lab.length*5.2+7,spent=act&&rem<allowance(m),sc=isDrop?(oy>15?.85:.95):(nn>=4?.8:nn>=3?1.05:1.25),[bx,by]=isDrop?(oy>15?[9,-8]:ox<0?[-5-w,-25]:[5,-25]):[5,-25];
       const sel=selected&&selected.seat===o.seat&&selected.mech===o.mech;
-      ts+=`<g class="mech" data-mech="${o.seat}:${o.mech}" tabindex="0" role="button" aria-label="${PLAYER_NAMES[o.seat]} ${o.mech} Lance, ${act?m.action+", "+fmt(rem)+" of "+fmt(allowance(m))+" movement points left":"no action chosen"}" transform="translate(${(c.x+ox).toFixed(1)},${(c.y+oy).toFixed(1)}) scale(${sc})">
+      ts+=`<g class="mech"${m.done?' opacity=".55"':""} data-mech="${o.seat}:${o.mech}" tabindex="0" role="button" aria-label="${PLAYER_NAMES[o.seat]} ${o.mech} Lance, ${act?m.action+", "+fmt(rem)+" of "+fmt(allowance(m))+" movement points left":"no action chosen"}" transform="translate(${(c.x+ox).toFixed(1)},${(c.y+oy).toFixed(1)}) scale(${sc})">
         ${sel?mechShape("#f2b134","#f2b134",2.8):""}
         ${mechShape(col,"#141414",1.1)}
         <g transform="translate(0,-4.4)"><circle r="5.4" fill="#fff" stroke="#141414" stroke-width="1"/><text y="3" text-anchor="middle" font-family="Chakra Petch, Arial, sans-serif" font-size="8.4" font-weight="700" fill="#1e2b36">${o.mech[0]}</text></g>
@@ -658,6 +758,7 @@ function renderInspect(){
     if(ACTIONS[m.action]){
       add("meta",`Action: ${m.action}${holdBonus(m)?" (+ holding position)":""}. ${ACTIONS[m.action].rule}`);
       add("meta",`${fmt(remOf(m))} of ${fmt(allowance(m))} MP left this turn. ${canControl(selected.seat)?"Click a highlighted hex to move.":"Belongs to another player."}`);
+      {const why=canControl(selected.seat)?moveBlockReason(selected.seat,selected.mech):"";if(why)add("dmgtxt",why);}
     }else add("meta",canControl(selected.seat)?"No action chosen. Pick one in the Lances panel to move.":"No action chosen yet. Belongs to another player.");
     const ro=(m.roster||[]).filter(x=>x&&x.trim());
     if(ro.length){const ol=document.createElement("ol");ol.className="rlist";(m.roster||[]).forEach((x,k)=>{if(!x||!x.trim())return;const li=document.createElement("li");const wv=(m.walk||[])[k];
@@ -879,11 +980,11 @@ function renderMechs(){
     st.append(minus,val,plus);
     const meta=document.createElement("div");meta.className="mmeta";
     const cell=byKey.get(key(m.q,m.r)),d=RES?RES.map.get(cell):null;
-    meta.textContent=`${ACTIONS[m.action]?`${fmt(remOf(m))} of ${fmt(allowance(m))} MP left`:"No action"} · ${d?describe(d)[0]:""}`;
+    meta.textContent=(m.done?"Done this round · ":"")+`${ACTIONS[m.action]?`${fmt(remOf(m))} of ${fmt(allowance(m))} MP left`:"No action"} · ${d?describe(d)[0]:""}`;
     const act=document.createElement("div");act.className="mactions";
     const sel=document.createElement("button");sel.className="sbtn"+(selected&&selected.seat===i&&selected.mech===name?" solid":"");sel.textContent=selected&&selected.seat===i&&selected.mech===name?"Selected":"Select";sel.onclick=()=>selectMech(i,name);
     const un=document.createElement("button");un.className="sbtn";un.textContent="Undo move";un.disabled=!ctl||!m.prev;un.onclick=()=>undo(i,name);
-    const asel=document.createElement("select");asel.className="actsel";asel.disabled=!ctl;asel.setAttribute("aria-label",`${name} Lance action`);
+    const asel=document.createElement("select");asel.className="actsel";asel.disabled=!ctl||!!m.done;asel.setAttribute("aria-label",`${name} Lance action`);
     asel.innerHTML=`<option value="">Choose action…</option>`+Object.keys(ACTIONS).map(a=>`<option value="${a}"${m.action===a?" selected":""}>${a}</option>`).join("");
     asel.onchange=()=>setAction(i,name,asel.value);
     act.append(asel,sel,un);
@@ -904,7 +1005,7 @@ function renderMechs(){
   $("refill").disabled=!ctl;
 }
 
-function refreshAll(){drawOverlay();renderSeats();renderMechs();renderInspect();renderInit();
+function refreshAll(){drawOverlay();renderSeats();renderMechs();renderInspect();renderInit();renderRound();
   $("mapctl").style.display=(!live||(isEditor&&canWrite))?"contents":"none";}
 
 function loadMap(seed){
@@ -917,9 +1018,9 @@ function loadMap(seed){
 }
 
 /* ----- map controls ----- */
-function armed(btn,label,fn){
+function armed(btn,label,fn,ask){
   if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent=label;fn();return;}
-  btn.dataset.armed="1";btn.textContent="Click again to confirm";
+  btn.dataset.armed="1";btn.textContent=ask||"Click again to confirm";
   setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent=label;}},3500);
 }
 function startMap(seed,keepSeed){
@@ -971,7 +1072,7 @@ loadMap(game.seed);
   if(u){myId=await u.id();isEditor=await u.canEdit();const cw=await u.can("data.write");canWrite=cw!==false;}
   else{canWrite=true;isEditor=false;}
   window.__hexSetAdmin=v=>{isEditor=!!v;refreshAll();};
-  live=true;rawSeats=new Array(NC).fill(null);scores=new Array(NC).fill(null);inits=new Array(NC).fill(null);selected=null;refreshAll();
+  live=true;rawSeats=new Array(NC).fill(null);scores=new Array(NC).fill(null);inits=new Array(NC).fill(null);round=1;turnDoc=null;selected=null;refreshAll();
   let initTried=false;
   db.doc("game/state").onSnapshot(snap=>{
     if(!snap.exists){
@@ -992,6 +1093,7 @@ loadMap(game.seed);
   },()=>toast("Lost the live connection. Reload to reconnect."));
   const bySeat=qs=>{const n=new Array(NC).fill(null);qs.docs.forEach(doc=>{const m=/^p(\d)$/.exec(doc.id);if(m&&+m[1]>=1&&+m[1]<=NC)n[+m[1]-1]=doc.data();});return n;};
   db.collection("scores").onSnapshot(qs=>{scores=bySeat(qs);refreshAll();},()=>{});
-  db.collection("init").onSnapshot(qs=>{inits=bySeat(qs);const od=qs.docs.find(d=>d.id==="order"),ov=od&&od.data();initOrder=ov&&Array.isArray(ov.seats)&&ov.seats.length?ov.seats.filter(x=>Number.isInteger(x)&&x>=0&&x<NC):null;refreshAll();},()=>{});
+  db.doc("game/round").onSnapshot(snap=>{const v=snap.exists?snap.data():null;round=v&&Number.isInteger(v.round)&&v.round>=1?v.round:1;refreshAll();},()=>{});
+  db.collection("init").onSnapshot(qs=>{inits=bySeat(qs);const od=qs.docs.find(d=>d.id==="order"),ov=od&&od.data();initOrder=ov&&Array.isArray(ov.seats)&&ov.seats.length?ov.seats.filter(x=>Number.isInteger(x)&&x>=0&&x<NC):null;const td=qs.docs.find(d=>d.id==="turn");turnDoc=td?td.data():null;refreshAll();},()=>{});
 })();
 })();

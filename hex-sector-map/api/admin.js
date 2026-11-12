@@ -1,5 +1,5 @@
 // Vercel serverless function for admin-only actions: New map / Reset lances / Load seed,
-// and Victory Point and XP changes.
+// the round number, and Victory Point and XP changes.
 // It checks the caller is an admin, then writes the map with the Supabase service key,
 // because the database refuses map changes from ordinary players.
 import { timingSafeEqual } from "node:crypto";
@@ -34,6 +34,9 @@ export default async function handler(req, res) {
     if (!Number.isInteger(seed) || seed < 0 || seed > 1e9) return res.status(400).json({ error: "Bad seed" });
     if (typeof epoch !== "string" || !/^[A-Za-z0-9]{1,40}$/.test(epoch)) return res.status(400).json({ error: "Bad epoch" });
     path = "game/state"; collection = "game"; data = { seed, epoch };
+  } else if (body.action === "setRound") {
+    if (!Number.isInteger(body.round) || body.round < 1 || body.round > 999) return res.status(400).json({ error: "Bad round" });
+    path = "game/round"; collection = "game"; data = { round: body.round };
   } else if (body.action === "setScore") {
     // Victory Points and XP for one seat: { vp, xp: { Alpha: [4], Beta: [4], Gamma: [4] } }
     if (typeof body.path !== "string" || !/^scores\/p[1-6]$/.test(body.path)) return res.status(400).json({ error: "Bad score path" });

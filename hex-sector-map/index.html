@@ -125,7 +125,19 @@ tr.sub td:first-child{padding-left:14px;color:var(--muted)}
 .initrow.adm{grid-template-columns:20px 16px 1fr auto auto}
 .initmove{display:flex;flex-direction:column;gap:2px}
 .initmove .tiny{width:22px;height:18px;font-size:.6rem}
+.turnlbl{font-family:"Barlow",sans-serif;font-size:.85rem;font-weight:600;color:var(--muted)}
+.initrow.active{background:rgba(242,177,52,.2);box-shadow:inset 4px 0 0 #f2b134;margin:0 -16px;padding:8px 12px 8px 16px;border-radius:2px}
+.turnlogs{grid-column:3/-1;display:flex;flex-direction:column;gap:2px;margin-top:-2px}
+.turnlog{font-size:.8rem;color:var(--ink) !important;opacity:.9;white-space:normal !important}
+.initact{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 0 2px}
 .initadmin{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-top:8px;border-top:1px dashed var(--line);width:100%}
+#nextround{width:104px;text-align:center;white-space:nowrap}
+#nextround[data-armed]{background:#c0362c;border-color:#c0362c;color:#fff}
+.roundbox{display:flex;align-items:center;gap:10px;background:var(--paper);border:1.5px solid var(--line);border-radius:8px;padding:6px 12px}
+.rlabel{font-family:"Chakra Petch",sans-serif;font-weight:600;font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.rnum{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1.8rem;line-height:1;color:var(--ink);min-width:1.4ch;text-align:center}
+.rin{width:68px;font-size:1.4rem;padding:2px 4px;border:1.5px solid var(--line);border-radius:6px;background:var(--bg)}
+.rin:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
 .dmgtxt{color:#c0362c;font-weight:600;font-size:.9rem;margin-top:4px}
 .dmgbtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .rlist{margin:6px 0 2px;padding-left:20px;font-size:.92rem}
@@ -145,6 +157,15 @@ tr.sub td:first-child{padding-left:14px;color:var(--muted)}
 .livetag{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;color:var(--muted)}
 .livetag i{width:8px;height:8px;border-radius:50%;background:#8a9399;display:inline-block}
 .livetag.on i{background:#30a46c}
+/* three columns: initiative + totals | map | panels */
+.wrap{max-width:1580px}
+.layout{grid-template-columns:300px minmax(0,1fr) 320px}
+.layout>.left{display:flex;flex-direction:column;gap:14px}
+@media (max-width:1240px){
+  .layout{grid-template-columns:minmax(0,1fr) 320px}
+  .layout>.left{grid-column:1/-1;order:3;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));align-items:start}
+}
+@media (max-width:900px){.layout{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -162,6 +183,12 @@ tr.sub td:first-child{padding-left:14px;color:var(--muted)}
       <h1>Hexagon Sector Map</h1>
       <p class="sub" id="subline"></p>
     </div>
+    <div class="roundbox" id="roundbox" aria-live="polite">
+      <span class="rlabel">Round</span>
+      <span class="rnum" id="roundnum">1</span>
+      <input id="roundset" class="rnum rin" type="number" min="1" max="999" inputmode="numeric" aria-label="Current round" style="display:none">
+      <button class="sbtn solid" id="nextround" style="display:none">Next round</button>
+    </div>
     <div class="controls">
       <span class="livetag" id="livetag"><i></i><span>Local game</span></span>
       <span id="mapctl" style="display:contents">
@@ -173,6 +200,10 @@ tr.sub td:first-child{padding-left:14px;color:var(--muted)}
     </div>
   </header>
   <div class="layout">
+    <aside class="left" aria-label="Initiative and map totals">
+      <div class="card" id="initcard"><h2>Initiative<span class="turnlbl" id="turnlabel"></span></h2><div id="initlist"></div><p class="note" id="initnote"></p><div class="initbtns" id="initbtns"></div></div>
+      <div class="card"><h2>Map totals</h2><table id="totals"></table></div>
+    </aside>
     <div class="board"><svg id="map" role="img" aria-label="Hex map shaped like a hexagon"></svg></div>
     <aside>
       <div class="card inspect" id="inspect" aria-live="polite">
@@ -183,8 +214,6 @@ tr.sub td:first-child{padding-left:14px;color:var(--muted)}
         <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="sbtn solid" id="refill">New turn: refill MP</button></div>
         <p class="note">The number on each lance is its movement points. Pick an Action for each lance before moving; it sets how far the lance can go and whether it may end on an enemy lance's hex. Each hex entered costs 1 MP and a Rough hex 2 MP; entering a highway hex, or following a highway out of one, costs ½ MP. Impassible hexes can't be entered, and lances never move through an enemy hex.</p></div>
       <div class="card"><h2>Players</h2><div id="seatlist"></div><p class="note" id="modenote"></p></div>
-      <div class="card" id="initcard"><h2>Initiative</h2><div id="initlist"></div><p class="note" id="initnote"></p><div class="initbtns" id="initbtns"></div></div>
-      <div class="card"><h2>Map totals</h2><table id="totals"></table></div>
       <div class="card"><h2>Legend</h2><div class="legend" id="legend"></div>
         <p class="note">Dashed inner border marks rough terrain (also on Special hexes); heavy border marks impassible terrain.</p></div>
     </aside>
