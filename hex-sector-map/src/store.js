@@ -39,8 +39,10 @@ export function createStore(supabase, room) {
       cache.delete(path);
       return true;
     }
+    // Only compare server timestamps with server timestamps. (Comparing against this
+    // device's clock made players with a fast clock ignore other players' changes.)
     if (cur && updatedAt && cur.updatedAt && updatedAt < cur.updatedAt) return false; // older than what we have
-    cache.set(path, { data, updatedAt: updatedAt || new Date().toISOString() });
+    cache.set(path, { data, updatedAt: updatedAt || (cur && cur.updatedAt) || null });
     return true;
   }
 
@@ -122,7 +124,7 @@ export function createStore(supabase, room) {
       async get() { await whenLoaded(); return docSnap(path); },
       async set(data) {
         const body = JSON.parse(JSON.stringify(data));
-        apply(path, body, new Date().toISOString());
+        apply(path, body, null); // local copy until the server confirms it
         notify(path, true);
         const { error } = await supabase.from("docs").upsert(
           { room, path, collection: collectionOf(path), data: body },

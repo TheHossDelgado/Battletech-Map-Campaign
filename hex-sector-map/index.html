@@ -139,6 +139,18 @@ tr.sub td:first-child{padding-left:14px;color:var(--muted)}
 .rnum{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1.8rem;line-height:1;color:var(--ink);min-width:1.4ch;text-align:center}
 .rin{width:68px;font-size:1.4rem;padding:2px 4px;border:1.5px solid var(--line);border-radius:6px;background:var(--bg)}
 .rin:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+.roster2{grid-column:1/4;padding-left:40px;margin-top:4px}
+.roster2 .rl{font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:2px}
+.mechline{display:grid;grid-template-columns:62px 48px 48px 1fr;gap:4px 6px;align-items:end;padding:6px 0;border-top:1px dashed var(--line)}
+.mechline .nm{grid-column:1/-1}
+.mechline input{font:inherit;font-size:.88rem;padding:5px 7px;border:1.5px solid var(--line);border-radius:4px;background:var(--bg);color:var(--ink);min-width:0;width:100%}
+.mechline input:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+.mechline input:disabled{opacity:.75}
+.fld{display:flex;flex-direction:column;gap:2px;font-size:.72rem;font-weight:600;color:var(--muted)}
+.mechline .fld .xpcell{justify-content:flex-start;height:30px}
+.lanceadmin{margin:-2px 0 8px;font-size:.85rem;color:var(--muted);font-weight:600}
+.lanceadmin select{margin-left:4px}
+.admbtn{border-color:#8e4ec6 !important;color:#8e4ec6 !important}
 .dmgtxt{color:#c0362c;font-weight:600;font-size:.9rem;margin-top:4px}
 .dmgbtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .rlist{margin:6px 0 2px;padding-left:20px;font-size:.92rem}
@@ -211,7 +223,7 @@ tr.sub td:first-child{padding-left:14px;color:var(--muted)}
         <div class="name">Select a hex</div>
         <div class="meta">Hover or tap any hex to see its type.</div>
       </div>
-      <div class="card" id="mechcard"><h2 id="mechtitle">Lances</h2><div id="mechlist"></div>
+      <div class="card" id="mechcard"><h2 id="mechtitle">Lances</h2><div class="lanceadmin" id="lanceadmin" style="display:none"><label>Admin: edit lances for <select id="lanceseat" class="actsel"></select></label></div><div id="mechlist"></div>
         <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="sbtn solid" id="refill">New turn: refill MP</button></div>
         <p class="note">The number on each lance is its movement points. Pick an Action for each lance before moving; it sets how far the lance can go and whether it may end on an enemy lance's hex. Each hex entered costs 1 MP and a Rough hex 2 MP; entering a highway hex, or following a highway out of one, costs ½ MP. Impassible hexes can't be entered, and lances never move through an enemy hex.</p></div>
       <div class="card"><h2>Players</h2><div id="seatlist"></div><p class="note" id="modenote"></p></div>

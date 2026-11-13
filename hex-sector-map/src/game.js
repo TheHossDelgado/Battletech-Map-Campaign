@@ -370,7 +370,7 @@ function setAction(i,name,a){const s=clone(seat(i)),m=s.mechs[name];m.action=ACT
 
 function freshSeat(i,keep){
   const [q,r]=CORNER_QR[i],mechs={};
-  MECHS.forEach(m=>{const mp=keep&&keep.mechs&&keep.mechs[m]&&typeof keep.mechs[m].mp==="number"?keep.mechs[m].mp:DEFAULT_MP;const ro=keep&&keep.mechs&&keep.mechs[m]&&Array.isArray(keep.mechs[m].roster)?keep.mechs[m].roster.slice(0,4):["","","",""];const km=keep&&keep.mechs&&keep.mechs[m]||{};mechs[m]={q,r,mp,spent:0,prev:null,roster:ro,walk:Array.isArray(km.walk)?km.walk.slice(0,4):[null,null,null,null],action:ACTIONS[km.action]?km.action:null,subtitle:typeof km.subtitle==="string"?km.subtitle:""};});
+  MECHS.forEach(m=>{const mp=keep&&keep.mechs&&keep.mechs[m]&&typeof keep.mechs[m].mp==="number"?keep.mechs[m].mp:DEFAULT_MP;const ro=keep&&keep.mechs&&keep.mechs[m]&&Array.isArray(keep.mechs[m].roster)?keep.mechs[m].roster.slice(0,4):["","","",""];const km=keep&&keep.mechs&&keep.mechs[m]||{};mechs[m]={q,r,mp,spent:0,prev:null,roster:ro,walk:Array.isArray(km.walk)?km.walk.slice(0,4):[null,null,null,null],gun:Array.isArray(km.gun)?km.gun.slice(0,4):[4,4,4,4],pil:Array.isArray(km.pil)?km.pil.slice(0,4):[5,5,5,5],action:ACTIONS[km.action]?km.action:null,subtitle:typeof km.subtitle==="string"?km.subtitle:""};});
   return {owner:keep&&keep.owner?keep.owner:null,epoch:game.epoch,mechs};
 }
 function seat(i){const raw=rawSeats[i];if(!raw||raw.epoch!==game.epoch||!raw.mechs||!MECHS.every(m=>raw.mechs[m]))return freshSeat(i,raw);return raw;}
@@ -440,8 +440,17 @@ function doAirDrop(c){
   toast(`${name} Lance air-dropped to ${describe(RES.map.get(c))[0]} (${c.q}, ${c.r}).`);
 }
 
+/* ----- admin move: put any lance on any hex, ignoring movement rules ----- */
+let adminMoveMode=null;
+function startAdminMove(i,name){if(!isAdminUser())return;airdropMode=null;adminMoveMode={seat:i,mech:name};selected={seat:i,mech:name};refreshAll();toast("Admin move: tap any hex. Esc cancels.");}
+function doAdminMove(c){
+  const mode=adminMoveMode;adminMoveMode=null;if(!mode||!isAdminUser()){refreshAll();return;}
+  const s=clone(seat(mode.seat)),m=s.mechs[mode.mech];if(m.q===c.q&&m.r===c.r){refreshAll();return;}
+  m.prev={q:m.q,r:m.r,spent:spentOf(m)};m.q=c.q;m.r=c.r;delete m.rem;writeSeat(mode.seat,s);
+  toast(`Admin moved P${mode.seat+1} ${mode.mech} Lance to ${describe(RES.map.get(c))[0]} (${c.q}, ${c.r}).`);
+}
 function selectMech(i,m){
-  airdropMode=null;
+  airdropMode=null;adminMoveMode=null;
   if(selected&&selected.seat===i&&selected.mech===m)selected=null;else selected={seat:i,mech:m};
   if(!live&&selected)localSeat=i;
   refreshAll();
@@ -539,7 +548,7 @@ function initOrderFinal(){
 function turnOrder(){return sortedInit(initEntries()).map(e=>e.seat);}
 function turnsActive(){return initOrderFinal()&&!turnState().complete;}
 function activeSeat(){if(!turnsActive())return null;const o=turnOrder(),t=turnState();return o[Math.min(t.idx,o.length-1)];}
-function movedLance(i){const s=seat(i);return MECHS.find(n=>!s.mechs[n].done&&spentOf(s.mechs[n])>0)||null;}
+function movedLance(i){const s=seat(i);return MECHS.find(n=>!s.mechs[n].done&&(spentOf(s.mechs[n])>0||s.mechs[n].airdropped))||null;}
 function canMoveLance(i,name){
   if(!turnsActive())return true;
   if(i!==activeSeat())return false;
@@ -617,6 +626,8 @@ function renderInit(){
             const cb=document.createElement("button");cb.className="sbtn";cb.textContent="Confirm without moving";cb.onclick=()=>confirmTurn(e.seat,sel.value);
             box.append(sel,cb);
           }
+          // a lance that starts its turn on its player's Air Base can Air Drop without moving first
+          ready.filter(n=>airDropOk(e.seat,n)).forEach(n=>{const ab=document.createElement("button");ab.className="sbtn airbtn";ab.textContent=`✈ Air Drop ${n}`;ab.onclick=()=>startAirDrop(e.seat,n);box.appendChild(ab);});
           const h=document.createElement("span");h.className="initsub";h.textContent="Choose an action for a lance that hasn't acted, move it, then confirm here.";box.appendChild(h);
         }
       }else{const h=document.createElement("span");h.className="initsub";h.textContent="Taking their turn…";box.appendChild(h);}
@@ -680,11 +691,12 @@ function newRoundReset(){
 }
 $("nextround").addEventListener("click",e=>{if(!isAdminUser())return;armed(e.currentTarget,"Next round",()=>{writeRound(round+1);newRoundReset();toast(`Round ${round}: movement refilled, actions and initiative cleared.`);},"Confirm?");});
 $("roundset").addEventListener("change",e=>{if(isAdminUser())writeRound(e.target.value);});
+$("lanceseat").addEventListener("change",e=>{adminLanceSeat=+e.target.value;selected=null;refreshAll();});
 $("roundset").addEventListener("keydown",e=>{if(e.key==="Enter")e.target.blur();});
 
 /* ----- lance rosters (4 mechs per lance) ----- */
 const rosterPending={};let rosterT=null;
-function applyPending(){Object.keys(rosterPending).forEach(i=>{const s=clone(seat(+i));Object.entries(rosterPending[i]).forEach(([n,p])=>{if(p.roster)s.mechs[n].roster=p.roster;if(p.walk)s.mechs[n].walk=p.walk;if(typeof p.subtitle==="string")s.mechs[n].subtitle=p.subtitle;});s.epoch=game.epoch;rawSeats[+i]=s;});}
+function applyPending(){Object.keys(rosterPending).forEach(i=>{const s=clone(seat(+i));Object.entries(rosterPending[i]).forEach(([n,p])=>{if(p.roster)s.mechs[n].roster=p.roster;if(p.walk)s.mechs[n].walk=p.walk;if(p.gun)s.mechs[n].gun=p.gun;if(p.pil)s.mechs[n].pil=p.pil;if(typeof p.subtitle==="string")s.mechs[n].subtitle=p.subtitle;});s.epoch=game.epoch;rawSeats[+i]=s;});}
 function setRoster(i,name,k,v){
   const r=((seat(i).mechs[name].roster)||[]).slice(0,4);while(r.length<4)r.push("");r[k]=v.slice(0,60);
   const p=((rosterPending[i]=rosterPending[i]||{})[name]=rosterPending[i][name]||{});p.roster=r;applyPending();
@@ -692,6 +704,15 @@ function setRoster(i,name,k,v){
 }
 function setSubtitle(i,name,v){
   const p=((rosterPending[i]=rosterPending[i]||{})[name]=rosterPending[i][name]||{});p.subtitle=v.slice(0,80);applyPending();
+  clearTimeout(rosterT);rosterT=setTimeout(flushRoster,700);
+}
+// Gunnery (G, default 4) and Piloting (P, default 5) for each mech in a lance
+const STAT_DEFAULT={gun:4,pil:5};
+function statOf(m,f,k){const a=m[f];return a&&typeof a[k]==="number"?a[k]:STAT_DEFAULT[f];}
+function setStat(i,name,f,k,v){
+  const m=seat(i).mechs[name],arr=[0,1,2,3].map(j=>statOf(m,f,j)),n=parseInt(v,10);
+  arr[k]=isFinite(n)&&n>=0?Math.min(12,n):STAT_DEFAULT[f];
+  const p=((rosterPending[i]=rosterPending[i]||{})[name]=rosterPending[i][name]||{});p[f]=arr;applyPending();
   clearTimeout(rosterT);rosterT=setTimeout(flushRoster,700);
 }
 function setWalk(i,name,k,v){
@@ -746,7 +767,10 @@ const DOFFS={1:[[0,21]],2:[[-23,4],[23,4]],3:[[-23,4],[23,4],[0,21]]};
 function drawOverlay(){
   const reachG=$("reach"),tokG=$("tokens");if(!reachG)return;
   reachMap=null;let rs="";
-  if(airdropMode){
+  if(adminMoveMode){
+    const cur=seat(adminMoveMode.seat).mechs[adminMoveMode.mech];
+    CELLS.forEach(c=>{if(c.q===cur.q&&c.r===cur.r)return;rs+=`<g transform="translate(${c.x.toFixed(1)},${c.y.toFixed(1)})"><polygon points="${hexPts(S-4)}" fill="rgba(142,78,198,.16)" stroke="#8e4ec6" stroke-width="2.2" stroke-dasharray="5 4"/></g>`;});
+  }else if(airdropMode){
     const cur=seat(airdropMode.seat).mechs[airdropMode.mech];
     CELLS.forEach(c=>{if(!airDropTarget(c)||(c.q===cur.q&&c.r===cur.r))return;
       rs+=`<g transform="translate(${c.x.toFixed(1)},${c.y.toFixed(1)})"><polygon points="${hexPts(S-4)}" fill="rgba(90,170,255,.22)" stroke="#3e7bfa" stroke-width="2.5" stroke-dasharray="5 4"/><path d="M0 -33L1.2 -29.3L5.6 -26.8V-26L1.2 -27L.9 -24.5L2.3 -23.6V-23L0 -23.5L-2.3 -23V-23.6L-.9 -24.5L-1.2 -27L-5.6 -26V-26.8L-1.2 -29.3Z" fill="#3e7bfa"/></g>`;});
@@ -797,9 +821,15 @@ function renderInspect(){
         ab.textContent=on?"Cancel Air Drop":"✈ Air Drop";ab.onclick=()=>{if(on){airdropMode=null;refreshAll();}else startAirDrop(selected.seat,selected.mech);};
         const w=document.createElement("div");w.style.marginTop="6px";w.appendChild(ab);insp.appendChild(w);}
     }else add("meta",canControl(selected.seat)?"No action chosen. Pick one in the Lances panel to move.":"No action chosen yet. Belongs to another player.");
+    if(isAdminUser()){const on=adminMoveMode&&adminMoveMode.seat===selected.seat&&adminMoveMode.mech===selected.mech;
+      const w=document.createElement("div");w.className="dmgbtns";
+      const mb=document.createElement("button");mb.className="sbtn admbtn";mb.textContent=on?"Cancel admin move":"Admin move (anywhere)";
+      mb.onclick=()=>{if(on){adminMoveMode=null;refreshAll();}else startAdminMove(selected.seat,selected.mech);};w.appendChild(mb);
+      if(live&&selected.seat!==mySeat()){const eb=document.createElement("button");eb.className="sbtn";eb.textContent="Edit this lance";eb.onclick=()=>{adminLanceSeat=selected.seat;refreshAll();$("mechcard").scrollIntoView({behavior:"smooth",block:"start"});};w.appendChild(eb);}
+      insp.appendChild(w);}
     const ro=(m.roster||[]).filter(x=>x&&x.trim());
     if(ro.length){const ol=document.createElement("ol");ol.className="rlist";(m.roster||[]).forEach((x,k)=>{if(!x||!x.trim())return;const li=document.createElement("li");const wv=(m.walk||[])[k];
-      const t=document.createElement("span");t.textContent=x+(typeof wv==="number"?` (Walk ${fmt(wv)})`:"")+" · XP";li.append(t,xpCell(selected.seat,selected.mech,k));ol.appendChild(li);});insp.appendChild(ol);}
+      const t=document.createElement("span");t.textContent=`${x} (${typeof wv==="number"?`Walk ${fmt(wv)}, `:""}G ${statOf(m,"gun",k)}, P ${statOf(m,"pil",k)}) · XP`;li.append(t,xpCell(selected.seat,selected.mech,k));ol.appendChild(li);});insp.appendChild(ol);}
     else add("meta","Lance roster not filled in yet.");
     if(hoverCell&&reachMap){const cost=reachMap.get(hoverCell);const [n]=describe(RES.map.get(hoverCell));add("meta",cost!=null?`${n}: costs ${fmt(cost)} MP to reach`:`${n}: out of reach`);}
   }
@@ -991,14 +1021,25 @@ function renderSeats(){
   const tag=$("livetag");tag.classList.toggle("on",live);tag.lastElementChild.textContent=live?"Live game":(window.__hexBackendError?"Local game · not saved":"Connecting…");
 }
 
+let mechRebuilding=false,adminLanceSeat=null;
+// Admins can open and edit any player's lances; everyone else sees their own seat
+function lanceSeat(){const mine=mySeat();if(live&&isAdminUser())return adminLanceSeat!=null?adminLanceSeat:(mine>=0?mine:0);return mine;}
+function renderLanceAdmin(i){
+  const box=$("lanceadmin");if(!box)return;const show=live&&isAdminUser();box.style.display=show?"":"none";if(!show)return;
+  const sel=$("lanceseat");sel.innerHTML=PLAYER_NAMES.map((n,k)=>{const o=seat(k).owner;return `<option value="${k}"${k===i?" selected":""}>P${k+1} · ${n}${o&&names[o]?" ("+names[o].replace(/[<>&"]/g,"")+")":""}</option>`;}).join("");
+}
 function renderMechs(){
-  const card=$("mechcard"),list=$("mechlist"),i=mySeat();
+  const card=$("mechcard"),list=$("mechlist"),i=lanceSeat();renderLanceAdmin(i);
   if(i<0){card.style.display="none";return;}
   card.style.display="";
-  const ae=document.activeElement;if(ae&&ae.tagName==="INPUT"&&list.contains(ae))return;
-  $("mechtitle").textContent=`${live?"Your lances":"Lances"} · P${i+1} ${PLAYER_NAMES[i]}`;
+  // Rebuild even while someone is typing in a roster box (so resets from other players show
+  // at once), then put their cursor back where it was.
+  const ae=document.activeElement;let refocus=null;
+  if(ae&&ae.tagName==="INPUT"&&list.contains(ae))refocus={label:ae.getAttribute("aria-label"),val:ae.value,a:ae.selectionStart,b:ae.selectionEnd};
+  mechRebuilding=true;
+  $("mechtitle").textContent=`${live&&!(isAdminUser()&&i!==mySeat())?"Your lances":"Lances"} · P${i+1} ${PLAYER_NAMES[i]}`;
   list.textContent="";
-  const s=seat(i),ctl=canControl(i);
+  const s=seat(i),ctl=canControl(i)||isAdminUser();
   MECHS.forEach(name=>{
     const m=s.mechs[name],row=document.createElement("div");
     row.className="mechrow"+(selected&&selected.seat===i&&selected.mech===name?" on":"");
@@ -1008,7 +1049,7 @@ function renderMechs(){
     if(!ctl&&!m.subtitle)sub.style.display="none";
     sub.addEventListener("input",()=>setSubtitle(i,name,sub.value));
     sub.addEventListener("keydown",e=>{if(e.key==="Enter")sub.blur();});
-    sub.addEventListener("blur",()=>{flushRoster();setTimeout(()=>{if(!list.contains(document.activeElement)||document.activeElement.tagName!=="INPUT")renderMechs();},0);});
+    sub.addEventListener("blur",()=>{if(mechRebuilding)return;flushRoster();setTimeout(()=>{if(!list.contains(document.activeElement)||document.activeElement.tagName!=="INPUT")renderMechs();},0);});
     nm.appendChild(sub);
     const st=document.createElement("div");st.className="stepper";
     const minus=document.createElement("button");minus.textContent="−";minus.setAttribute("aria-label",`Lower ${name} movement points`);minus.disabled=!ctl||m.mp<=0||!!lowestWalk(m);minus.onclick=()=>setMP(i,name,-1);
@@ -1021,25 +1062,35 @@ function renderMechs(){
     const act=document.createElement("div");act.className="mactions";
     const sel=document.createElement("button");sel.className="sbtn"+(selected&&selected.seat===i&&selected.mech===name?" solid":"");sel.textContent=selected&&selected.seat===i&&selected.mech===name?"Selected":"Select";sel.onclick=()=>selectMech(i,name);
     const un=document.createElement("button");un.className="sbtn";un.textContent="Undo move";un.disabled=!ctl||!m.prev;un.onclick=()=>undo(i,name);
-    const asel=document.createElement("select");asel.className="actsel";asel.disabled=!ctl||!!m.done;asel.setAttribute("aria-label",`${name} Lance action`);
+    const asel=document.createElement("select");asel.className="actsel";asel.disabled=!ctl||(!!m.done&&!isAdminUser());asel.setAttribute("aria-label",`${name} Lance action`);
     asel.innerHTML=`<option value="">Choose action…</option>`+Object.keys(ACTIONS).map(a=>`<option value="${a}"${m.action===a?" selected":""}>${a}</option>`).join("");
     asel.onchange=()=>setAction(i,name,asel.value);
     act.append(asel,sel,un);
     const rule=document.createElement("div");rule.className="actrule";rule.textContent=(lowestWalk(m)?`MP ${fmt(mpOf(m))} from the lowest Walk MV. `:"")+(ACTIONS[m.action]?ACTIONS[m.action].rule+(holdBonus(m)?" Holding: green plus active.":""):"Choose an action to move this lance.");
-    const ro=document.createElement("div");ro.className="roster";
+    const ro=document.createElement("div");ro.className="roster2";
     const rl=document.createElement("div");rl.className="rl";rl.textContent="Lance roster";ro.appendChild(rl);
-    const hn=document.createElement("div");hn.className="mvh";hn.textContent="Mech";const hv=document.createElement("div");hv.className="mvh";hv.textContent="Walk MV";const hx=document.createElement("div");hx.className="mvh";hx.style.textAlign="right";hx.textContent="XP";ro.append(hn,hv,hx);
-    const blur=()=>{flushRoster();setTimeout(()=>{if(!list.contains(document.activeElement)||document.activeElement.tagName!=="INPUT")renderMechs();},0);};
-    for(let k=0;k<4;k++){const inp=document.createElement("input");inp.type="text";inp.maxLength=60;inp.placeholder=`Mech ${k+1}`;
+    const blur=()=>{if(mechRebuilding)return;flushRoster();setTimeout(()=>{if(!list.contains(document.activeElement)||document.activeElement.tagName!=="INPUT")renderMechs();},0);};
+    const field=(cap,el)=>{const w=document.createElement("label");w.className="fld";const c=document.createElement("span");c.textContent=cap;w.append(c,el);return w;};
+    const num=(aria,val,ph,step,min,max,on)=>{const e=document.createElement("input");e.type="number";e.min=min;e.max=max;e.step=step;e.inputMode="decimal";e.placeholder=ph;
+      e.setAttribute("aria-label",aria);e.value=val;e.disabled=!ctl;e.addEventListener("input",()=>on(e.value));e.addEventListener("blur",blur);return e;};
+    for(let k=0;k<4;k++){
+      const line=document.createElement("div");line.className="mechline";
+      const inp=document.createElement("input");inp.type="text";inp.maxLength=60;inp.placeholder=`Mech ${k+1}`;inp.className="nm";
       inp.setAttribute("aria-label",`${name} Lance, mech ${k+1}`);inp.value=((m.roster||[])[k])||"";inp.disabled=!ctl;
       inp.addEventListener("input",()=>setRoster(i,name,k,inp.value));inp.addEventListener("blur",blur);
-      const mv=document.createElement("input");mv.type="number";mv.min="0";mv.max="20";mv.step="0.5";mv.inputMode="decimal";mv.placeholder="–";
-      mv.setAttribute("aria-label",`${name} Lance, mech ${k+1} Walk MV`);const wv=(m.walk||[])[k];mv.value=typeof wv==="number"?String(wv):"";mv.disabled=!ctl;
-      mv.addEventListener("input",()=>setWalk(i,name,k,mv.value));mv.addEventListener("blur",blur);
-      ro.append(inp,mv,xpCell(i,name,k));}
+      const wv=(m.walk||[])[k];
+      const mv=num(`${name} Lance, mech ${k+1} Walk MV`,typeof wv==="number"?String(wv):"","–","0.5","0","20",v=>setWalk(i,name,k,v));
+      const g=num(`${name} Lance, mech ${k+1} Gunnery`,String(statOf(m,"gun",k)),"4","1","0","12",v=>setStat(i,name,"gun",k,v));
+      const pl=num(`${name} Lance, mech ${k+1} Piloting`,String(statOf(m,"pil",k)),"5","1","0","12",v=>setStat(i,name,"pil",k,v));
+      const xf=document.createElement("div");xf.className="fld";const xc=document.createElement("span");xc.textContent="XP";xf.append(xc,xpCell(i,name,k));
+      line.append(inp,field("Walk MV",mv),field("G",g),field("P",pl),xf);ro.appendChild(line);
+    }
     row.append(tok,nm,st,meta,act,rule,ro);list.appendChild(row);
   });
   $("refill").disabled=!ctl;
+  if(refocus){const el=[...list.querySelectorAll("input")].find(x=>x.getAttribute("aria-label")===refocus.label);
+    if(el&&!el.disabled){el.value=refocus.val;el.focus();try{el.setSelectionRange(refocus.a,refocus.b);}catch(e){}}}
+  mechRebuilding=false;
 }
 
 function refreshAll(){drawOverlay();renderSeats();renderMechs();renderInspect();renderInit();renderRound();
@@ -1078,6 +1129,12 @@ $("refill").addEventListener("click",()=>{const i=mySeat();if(i>=0&&canControl(i
 /* ----- board interaction ----- */
 const svgEl=$("map");
 svgEl.addEventListener("click",e=>{
+  if(adminMoveMode){
+    const h=e.target.closest(".hexcell"),tk=e.target.closest("[data-mech]");let c=null;
+    if(h)c=CELLS[+h.dataset.i];else if(tk){const [i,m]=tk.dataset.mech.split(":");const mm=seat(+i).mechs[m];c=byKey.get(key(mm.q,mm.r));}
+    if(c)doAdminMove(c);else{adminMoveMode=null;refreshAll();}
+    return;
+  }
   if(airdropMode){
     const h=e.target.closest(".hexcell"),tk=e.target.closest("[data-mech]");let c=null;
     if(h)c=CELLS[+h.dataset.i];else if(tk){const [i,m]=tk.dataset.mech.split(":");const mm=seat(+i).mechs[m];c=byKey.get(key(mm.q,mm.r));}
@@ -1093,7 +1150,7 @@ svgEl.addEventListener("click",e=>{
 const hov=e=>{const h=e.target.closest(".hexcell");if(h){const c=CELLS[+h.dataset.i];if(c!==hoverCell){hoverCell=c;renderInspect();markCells();}}};
 svgEl.addEventListener("mouseover",hov);svgEl.addEventListener("focusin",hov);
 svgEl.addEventListener("keydown",e=>{
-  if(e.key==="Escape"){airdropMode=null;selected=null;pinnedCell=null;refreshAll();return;}
+  if(e.key==="Escape"){airdropMode=null;adminMoveMode=null;selected=null;pinnedCell=null;refreshAll();return;}
   if(e.key==="Enter"||e.key===" "){const t=e.target.closest("[data-mech]")||e.target.closest(".hexcell");if(t){e.preventDefault();t.dispatchEvent(new MouseEvent("click",{bubbles:true}));}}
 });
 
