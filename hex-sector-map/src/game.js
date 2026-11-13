@@ -681,7 +681,18 @@ function renderRound(){
   if(document.activeElement!==inp)inp.value=String(round);
 }
 // Next round: advance the counter, refill every lance's MP, clear every lance's action, and clear initiative
+// At the end of a round, a Special hex held by lances of exactly one player becomes that player's
+function captureSites(){
+  const caught=[];
+  occupants().forEach((list,k)=>{
+    const c=byKey.get(k);if(!c||RES.map.get(c).kind!=="Special")return;
+    const seats=[...new Set(list.map(o=>o.seat))];if(seats.length!==1)return;
+    if(hexState(c).owner!==seats[0]){setOwner(c,seats[0]);caught.push(`P${seats[0]+1} took ${RES.map.get(c).name} (${c.q}, ${c.r})`);}
+  });
+  return caught;
+}
 function newRoundReset(){
+  const caught=captureSites();if(caught.length)setTimeout(()=>toast(caught.join(" · ")),2600);
   for(let i=0;i<NC;i++){
     const s=clone(seat(i));let ch=false;
     MECHS.forEach(n=>{const m=s.mechs[n];if(spentOf(m)||m.action||m.prev||m.done||m.airdropped||typeof m.rem==="number"){m.spent=0;delete m.rem;m.prev=null;m.action=null;delete m.done;delete m.airdropped;ch=true;}});
